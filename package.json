@@ -1,0 +1,7 @@
+{
+  "name": "bell-backend",
+  "private": true,
+  "type": "module",
+  "scripts": { "dev": "node --watch src/server.js", "start": "node src/server.js" },
+  "dependencies": { "cors": "latest", "dotenv": "latest", "express": "latest", "firebase-admin": "latest", "multer": "latest" }
+}

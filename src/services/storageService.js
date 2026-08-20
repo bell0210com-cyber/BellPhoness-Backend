@@ -1,0 +1,4 @@
+import { bucket } from '../config/firebaseAdmin.js';
+const safeName = (name) => name.replace(/[^a-zA-Z0-9._-]/g, '-');
+export async function uploadProductImages(productId, files, variantId) { const folder = variantId ? `products/${productId}/variants/${variantId}` : `products/${productId}`; return Promise.all(files.map(async (file) => { const objectPath = `${folder}/${Date.now()}-${safeName(file.originalname)}`; const storageFile = bucket().file(objectPath); await storageFile.save(file.buffer, { contentType: file.mimetype, resumable: false, metadata: { cacheControl: 'public,max-age=31536000' } }); const [url] = await storageFile.getSignedUrl({ action: 'read', expires: '2500-01-01' }); return { url, path: objectPath }; })); }
+export async function deleteProductImage(path) { if (path) await bucket().file(path).delete({ ignoreNotFound: true }); }
