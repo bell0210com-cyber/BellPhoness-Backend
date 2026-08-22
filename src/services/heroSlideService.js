@@ -25,14 +25,15 @@ export function validateHeroSlide(input) {
 }
 
 export async function listHeroSlides(activeOnly = false) {
-  let query = heroSlides().orderBy('order', 'asc');
+  const query = heroSlides().orderBy('order', 'asc');
+  const snapshot = await query.get();
+  let slides = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
   
   if (activeOnly) {
-    query = query.where('isActive', '==', true);
+    slides = slides.filter(slide => slide.isActive);
   }
   
-  const snapshot = await query.get();
-  return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  return slides;
 }
 
 export async function getHeroSlide(id) {
