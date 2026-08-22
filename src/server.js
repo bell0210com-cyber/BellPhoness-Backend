@@ -10,6 +10,8 @@ import adminOrderRoutes from './routes/adminOrderRoutes.js';
 // --- Naye Imports Yahan Add Kiye Hain ---
 import adminCustomerRoutes from './routes/adminCustomerRoutes.js';
 import adminSettingsRoutes from './routes/adminSettingsRoutes.js';
+import heroSlideRoutes from './routes/heroSlideRoutes.js';
+import adminHeroSlideRoutes from './routes/adminHeroSlideRoutes.js';
 
 import { isFirebaseReady } from './config/firebaseAdmin.js';
 import { errorHandler, notFound } from './middleware/errorMiddleware.js';
@@ -33,6 +35,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // API routes
+app.use('/api/hero-slides', heroSlideRoutes);
 app.use('/api/products', productRoutes);
 app.use('/api/admin/products', adminProductRoutes);
 
@@ -42,6 +45,7 @@ app.use('/api/admin/orders', adminOrderRoutes);
 // --- Naye Routes Yahan Add Kiye Hain ---
 app.use('/api/admin/customers', adminCustomerRoutes);
 app.use('/api/admin/settings', adminSettingsRoutes);
+app.use('/api/admin/hero-slides', adminHeroSlideRoutes);
 
 // Error handling
 app.use(notFound);
