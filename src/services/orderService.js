@@ -1,5 +1,6 @@
-import { db } from '../config/firebaseAdmin.js';
+import { db, auth } from '../config/firebaseAdmin.js';
 import { readProduct } from './productService.js';
+import { sendOrderStatusEmail } from './mailService.js';
 
 const orders = () => db().collection('orders');
 
@@ -90,6 +91,27 @@ export async function updateOrder(id, input) {
   const allowed = ['Pending', 'Confirmed', 'Packed', 'Shipped', 'Delivered', 'Cancelled'];
   if (!allowed.includes(input.status))
     throw Object.assign(new Error('Invalid order status.'), { status: 400 });
+    
   await orders().doc(id).update({ status: input.status, updatedAt: new Date() });
-  return readOrder(id, null, true);
+  const updatedOrder = await readOrder(id, null, true);
+
+  // Attempt to send email notification
+  try {
+    let customerEmail = updatedOrder.shippingAddress?.email || updatedOrder.email;
+    
+    // Fallback: try to fetch email from Firebase Auth if not in the order document
+    if (!customerEmail && updatedOrder.userId) {
+      const userRecord = await auth().getUser(updatedOrder.userId);
+      customerEmail = userRecord.email;
+    }
+
+    if (customerEmail) {
+      // We don't await this so it doesn't block the API response
+      sendOrderStatusEmail(updatedOrder, customerEmail);
+    }
+  } catch (error) {
+    console.error(`Failed to trigger email for order ${id}:`, error);
+  }
+
+  return updatedOrder;
 }
