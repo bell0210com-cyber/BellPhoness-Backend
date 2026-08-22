@@ -55,13 +55,23 @@ export async function createHeroSlide(input) {
 }
 
 export async function updateHeroSlide(id, input) {
-  const data = validateHeroSlide(input);
   const ref = heroSlides().doc(id);
   
   const doc = await ref.get();
   if (!doc.exists) {
     throw Object.assign(new Error('Slide not found.'), { status: 404 });
   }
+
+  // Handle partial update for toggleActive
+  if (Object.keys(input).length === 1 && 'isActive' in input) {
+    await ref.update({
+      isActive: Boolean(input.isActive),
+      updatedAt: new Date(),
+    });
+    return getHeroSlide(id);
+  }
+  
+  const data = validateHeroSlide(input);
   
   await ref.update({
     ...data,
