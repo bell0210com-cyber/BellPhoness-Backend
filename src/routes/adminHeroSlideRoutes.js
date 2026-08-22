@@ -7,10 +7,11 @@ import {
   deleteHeroSlide,
 } from '../services/heroSlideService.js';
 import { requireAdmin } from '../middleware/adminMiddleware.js';
+import { verifyFirebaseToken } from '../middleware/authMiddleware.js';
 
 const router = express.Router();
 
-router.use(requireAdmin);
+router.use(verifyFirebaseToken, requireAdmin);
 
 router.get('/', async (req, res, next) => {
   try {
