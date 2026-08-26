@@ -7,20 +7,26 @@ export function validateHeroSlide(input) {
     throw Object.assign(new Error('Image URL is required.'), { status: 400 });
   }
 
+  const link = input.link?.trim() || input.primaryButtonLink?.trim() || '';
+  const heading1 = input.headingLine1?.trim() || input.title?.trim() || '';
+
   return {
     imageUrl: input.imageUrl.trim(),
-    eyebrowText: input.eyebrowText?.trim() || '',
-    headingLine1: input.headingLine1?.trim() || '',
+    link,
+    title: heading1,
+    headingLine1: heading1,
     headingLine2: input.headingLine2?.trim() || '',
+    eyebrowText: input.eyebrowText?.trim() || '',
     description: input.description?.trim() || '',
-    primaryButtonText: input.primaryButtonText?.trim() || '',
-    primaryButtonLink: input.primaryButtonLink?.trim() || '',
-    secondaryButtonText: input.secondaryButtonText?.trim() || '',
-    secondaryButtonLink: input.secondaryButtonLink?.trim() || '',
+    couponCode: input.couponCode?.trim() || input.badgeText?.trim() || '',
     badgeTextLine1: input.badgeTextLine1?.trim() || '',
     badgeTextLine2: input.badgeTextLine2?.trim() || '',
+    primaryButtonText: input.primaryButtonText?.trim() || 'SHOP NOW',
+    primaryButtonLink: link || '/shop',
+    secondaryButtonText: input.secondaryButtonText?.trim() || '',
+    secondaryButtonLink: input.secondaryButtonLink?.trim() || '',
     order: Number(input.order) || 0,
-    isActive: Boolean(input.isActive),
+    isActive: input.isActive !== undefined ? Boolean(input.isActive) : true,
   };
 }
 
@@ -45,6 +51,14 @@ export async function getHeroSlide(id) {
 }
 
 export async function createHeroSlide(input) {
+  const existingSnapshot = await heroSlides().get();
+  if (existingSnapshot.size >= 5) {
+    throw Object.assign(
+      new Error('Maximum limit of 5 hero slides reached. Please edit or delete an existing slide to add a new one.'),
+      { status: 400 }
+    );
+  }
+
   const data = validateHeroSlide(input);
   const timestamp = new Date();
   const ref = await heroSlides().add({
