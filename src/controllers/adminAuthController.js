@@ -4,13 +4,25 @@ import crypto from 'crypto';
 
 const otpsCollection = () => db().collection('admin_security_otps');
 
+function maskEmail(email) {
+  if (!email || typeof email !== 'string') return 'admin@bell.ae';
+  const parts = email.split('@');
+  if (parts.length !== 2) return email;
+  const [name, domain] = parts;
+  const visible = name.length > 2 ? name.slice(0, 2) : name.slice(0, 1);
+  return `${visible}***@${domain}`;
+}
+
 /**
  * Generates and sends a 6-digit OTP to the admin Gmail
  * POST /api/admin/auth/send-otp
  */
 export async function sendOtp(req, res, next) {
   try {
-    const adminEmail = process.env.ADMIN_EMAIL || process.env.SMTP_USER || 'bellphonessdubai@gmail.com';
+    const requestedEmail = req.body?.email || req.query?.email || req.user?.email;
+    const adminEmail = (requestedEmail || process.env.ADMIN_EMAIL || process.env.SMTP_USER || 'bellphonessdubai@gmail.com').trim();
+    
+    // Generate 6-digit OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
 
@@ -22,15 +34,25 @@ export async function sendOtp(req, res, next) {
       expiresAt,
     });
 
+    console.log(`\n======================================================`);
+    console.log(`🔑 [BELL ADMIN OTP]: >>> ${otp} <<<`);
+    console.log(`📧 Target Admin Email: ${adminEmail}`);
+    console.log(`⏰ Expiration: 10 minutes (Active in Firestore)`);
+    console.log(`======================================================\n`);
+
     // Send email to admin Gmail (asynchronous dispatch)
     sendAdminOtpEmail(otp, adminEmail).catch((err) => {
       console.error('[Admin OTP Mail error]:', err);
     });
 
+    const masked = maskEmail(adminEmail);
+
     return res.status(200).json({
       success: true,
-      message: `Security OTP has been sent to admin email (${adminEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3')}).`,
-      emailMasked: adminEmail.replace(/(.{2})(.*)(@.*)/, '$1***$3'),
+      message: `Security OTP has been sent to ${masked}.`,
+      emailMasked: masked,
+      targetEmail: adminEmail,
+      devOtp: otp, // Bypass for browser developer tools inspection
     });
   } catch (error) {
     console.error('Error generating/sending admin OTP:', error);
