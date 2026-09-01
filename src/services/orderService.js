@@ -21,9 +21,11 @@ export async function createOrder(userId, input) {
     throw Object.assign(new Error('Order must include items.'), { status: 400 });
 
   const items = await Promise.all(
-    input.items.map(async ({ productId, variantId, quantity }) => {
-      const product = await readProduct(productId, true);
-      const variant = product.variants.find((entry) => entry.id === variantId);
+    input.items.map(async (rawItem) => {
+      const lookupId = rawItem.productId || rawItem.id || rawItem.variantId;
+      const quantity = Number(rawItem.quantity) || 1;
+      const product = await readProduct(lookupId, true);
+      const variant = product.variants.find((entry) => entry.id === rawItem.variantId || entry.id === lookupId) || product.variants[0];
 
       if (!variant || variant.stock < quantity || quantity < 1)
         throw Object.assign(new Error('One or more items are unavailable.'), { status: 400 });
@@ -31,13 +33,13 @@ export async function createOrder(userId, input) {
       const unitPrice = variant.salePrice ?? variant.price;
 
       return {
-        productId,
-        variantId,
+        productId: product.id,
+        variantId: variant.id,
         name: product.name,
         sku: variant.sku,
-        quantity: Number(quantity),
+        quantity,
         unitPrice,
-        lineTotal: unitPrice * Number(quantity)
+        lineTotal: unitPrice * quantity
       };
     })
   );
@@ -82,9 +84,19 @@ export async function readOrder(id, userId, isAdmin) {
   return { id: snap.id, ...snap.data() };
 }
 
-export async function listAllOrders() {
-  const snapshot = await orders().get();
-  return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+export async function listAllOrders({ limit: limitCount } = {}) {
+  let query = orders();
+  try {
+    query = query.orderBy('createdAt', 'desc');
+    if (limitCount && Number(limitCount) > 0) query = query.limit(Number(limitCount));
+    const snapshot = await query.get();
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (err) {
+    const snapshot = await orders().get();
+    let list = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    if (limitCount && Number(limitCount) > 0) list = list.slice(0, Number(limitCount));
+    return list;
+  }
 }
 
 export async function updateOrder(id, input) {

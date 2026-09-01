@@ -29,3 +29,17 @@ export async function verifyFirebaseToken(req, res, next) {
     });
   }
 }
+
+export async function optionalFirebaseToken(req, res, next) {
+  if (!isFirebaseReady()) return next();
+
+  const token = req.headers.authorization?.replace(/^Bearer\s+/i, '');
+  if (!token) return next();
+
+  try {
+    req.user = await auth().verifyIdToken(token);
+  } catch {
+    // Ignore invalid token in optional middleware
+  }
+  return next();
+}
