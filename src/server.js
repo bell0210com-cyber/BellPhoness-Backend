@@ -14,7 +14,6 @@ import heroSlideRoutes from './routes/heroSlideRoutes.js';
 import adminHeroSlideRoutes from './routes/adminHeroSlideRoutes.js';
 import tamaraRoutes from './routes/tamaraRoutes.js';
 import tabbyRoutes from './routes/tabbyRoutes.js';
-import adminAuthRoutes from './routes/adminAuthRoutes.js';
 
 import { isFirebaseReady } from './config/firebaseAdmin.js';
 import { errorHandler, notFound } from './middleware/errorMiddleware.js';
@@ -51,7 +50,7 @@ app.use('/api/payments/tabby', tabbyRoutes);
 
 
 
-app.use('/api/admin/auth', adminAuthRoutes);
+// --- Naye Routes Yahan Add Kiye Hain ---
 app.use('/api/admin/customers', adminCustomerRoutes);
 app.use('/api/admin/settings', adminSettingsRoutes);
 app.use('/api/admin/stats', adminStatsRoutes);
