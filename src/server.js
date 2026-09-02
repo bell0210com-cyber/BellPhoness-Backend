@@ -60,10 +60,13 @@ app.use('/api/admin/hero-slides', adminHeroSlideRoutes);
 app.use(notFound);
 app.use(errorHandler);
 
+import { startTabbyCronJob } from './services/tabbyCron.js';
+
 // Start server
 const PORT = process.env.PORT || 5000;
 
 app.listen(PORT, () => {
   console.log(`BELL API listening on ${PORT}`);
+  startTabbyCronJob();
 });
-// Trigger deployment
+

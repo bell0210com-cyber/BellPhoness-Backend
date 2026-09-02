@@ -95,7 +95,7 @@ export async function createCheckout(req, res, next) {
     const orderId = orderDocRef.id;
     const orderData = { id: orderId, items, subtotal, shipping, total, shippingAddress: input.shippingAddress };
 
-    const clientOrigin = req.headers.origin || process.env.CLIENT_URL?.split(',')[0] || 'http://localhost:5173';
+    const clientOrigin = req.headers.origin || process.env.CLIENT_URL?.split(',')[0] || 'https://bellphoness.com';
 
     // Call Tabby Checkout API
     const session = await tabbyService.createCheckoutSession({
@@ -135,25 +135,29 @@ export async function createCheckout(req, res, next) {
 /**
  * Handles Webhook Notifications from Tabby
  * POST /api/tabby/webhook
+ *
+ * Flow:
+ * 1. Receive webhook, check status === "authorized" (lowercase) or event === "payment.authorized"
+ * 2. GET https://api.tabby.ai/api/v2/payments/{payment_id} with SECRET_KEY
+ * 3. Verify response status === "AUTHORIZED" (uppercase)
+ * 4. If AUTHORIZED -> POST https://api.tabby.ai/api/v2/payments/{payment_id}/captures
+ * 5. Update Firestore order status to "paid"
  */
 export async function handleWebhook(req, res, next) {
   try {
-    if (!tabbyService.verifyWebhook(req)) {
-      console.warn('[Tabby Webhook] Unauthorized notification received.');
-      return res.status(401).json({ message: 'Unauthorized webhook request.' });
+    const payload = req.body || {};
+    console.log('[Tabby Webhook Received]:', JSON.stringify(payload, null, 2));
+
+    const incomingStatus = (payload.status || payload.event || '').toLowerCase();
+    const paymentId = payload.id || payload.payment?.id || payload.payment_id;
+    const orderId = payload.order?.reference_id || payload.order_id;
+
+    if (!paymentId && !orderId) {
+      console.warn('[Tabby Webhook] Webhook payload missing paymentId and orderId.');
+      return res.status(200).json({ status: 'ignored_missing_identifiers' });
     }
 
-    const payload = req.body || {};
-    console.log('[Tabby Webhook Received]:', payload);
-
-    const {
-      id: paymentId,
-      status: paymentStatus,
-      order,
-    } = payload;
-
-    const orderId = order?.reference_id || payload.order_id;
-
+    // Find the corresponding Firestore order
     let orderDoc = null;
     if (orderId) {
       const snap = await ordersCollection().doc(orderId).get();
@@ -167,54 +171,84 @@ export async function handleWebhook(req, res, next) {
       }
     }
 
-    if (!orderDoc) {
-      console.warn(`[Tabby Webhook] Order reference not found for orderId: ${orderId} / paymentId: ${paymentId}`);
-      return res.status(200).json({ status: 'order_not_found_acknowledged' });
+    // Step 1: Check if webhook indicates authorized status
+    const isIncomingAuthorized =
+      incomingStatus === 'authorized' ||
+      incomingStatus === 'payment.authorized' ||
+      incomingStatus === 'created';
+
+    if (paymentId && isIncomingAuthorized) {
+      // Step 2: GET payment details directly from Tabby API with SECRET_KEY
+      const livePayment = await tabbyService.getPayment(paymentId);
+      console.log(`[Tabby Webhook Verification] Payment ${paymentId} Live Status:`, livePayment.status);
+
+      // Step 3: Verify response status === "AUTHORIZED"
+      if (livePayment.status === 'AUTHORIZED') {
+        // Step 4: Capture payment
+        const captureAmount = livePayment.amount || (orderDoc ? orderDoc.data().total : null);
+        console.log(`[Tabby Webhook Capturing] Capturing payment ${paymentId} for AED ${captureAmount}...`);
+        
+        await tabbyService.capturePayment(paymentId, captureAmount);
+
+        // Step 5: Update Firestore order status to "paid"
+        if (orderDoc) {
+          await orderDoc.ref.update({
+            status: 'paid',
+            paymentStatus: 'paid',
+            'tabby.status': 'CAPTURED',
+            'tabby.capturedAt': new Date(),
+            'tabby.paymentId': paymentId,
+            'tabby.amount': captureAmount,
+            updatedAt: new Date(),
+          });
+
+          // Dispatch order confirmation email
+          try {
+            const orderData = { id: orderDoc.id, ...orderDoc.data() };
+            const customerEmail = orderData.shippingAddress?.email || orderData.email;
+            if (customerEmail) {
+              await sendOrderStatusEmail({ ...orderData, status: 'Confirmed' }, 'Confirmed', customerEmail);
+            }
+          } catch (mailErr) {
+            console.error('[Tabby Confirmation Email Error]:', mailErr.message);
+          }
+        }
+
+        return res.status(200).json({
+          status: 'success',
+          action: 'captured',
+          orderStatus: 'paid',
+          paymentId,
+        });
+      } else if (livePayment.status === 'CLOSED' || livePayment.status === 'CAPTURED') {
+        if (orderDoc) {
+          await orderDoc.ref.update({
+            status: 'paid',
+            paymentStatus: 'paid',
+            'tabby.status': livePayment.status,
+            updatedAt: new Date(),
+          });
+        }
+        return res.status(200).json({ status: 'already_captured', paymentId });
+      }
     }
 
-    const currentOrder = { id: orderDoc.id, ...orderDoc.data() };
-    const normalizedStatus = (paymentStatus || '').toUpperCase();
-
-    if (normalizedStatus === 'AUTHORIZED' || normalizedStatus === 'CAPTURED' || normalizedStatus === 'CLOSED') {
-      // If authorized, capture payment
-      if (normalizedStatus === 'AUTHORIZED' && paymentId) {
-        try {
-          await tabbyService.capturePayment(paymentId, currentOrder.total);
-        } catch (capErr) {
-          console.warn('[Tabby Capture Warning]:', capErr.message);
-        }
+    if (incomingStatus === 'rejected' || incomingStatus === 'failed' || incomingStatus === 'expired') {
+      if (orderDoc) {
+        await orderDoc.ref.update({
+          status: 'Cancelled',
+          paymentStatus: 'Failed',
+          'tabby.status': incomingStatus.toUpperCase(),
+          updatedAt: new Date(),
+        });
       }
-
-      await orderDoc.ref.update({
-        paymentStatus: 'Paid',
-        status: 'Confirmed',
-        'tabby.status': normalizedStatus,
-        'tabby.approvedAt': new Date(),
-        updatedAt: new Date(),
-      });
-
-      // Send Order Confirmation Notification Email
-      try {
-        const customerEmail = currentOrder.shippingAddress?.email || currentOrder.email;
-        if (customerEmail) {
-          await sendOrderStatusEmail({ ...currentOrder, status: 'Confirmed' }, 'Confirmed', customerEmail);
-        }
-      } catch (mailErr) {
-        console.error('[Tabby Mail Warning]:', mailErr.message);
-      }
-    } else if (normalizedStatus === 'REJECTED' || normalizedStatus === 'EXPIRED') {
-      await orderDoc.ref.update({
-        paymentStatus: 'Failed',
-        status: 'Cancelled',
-        'tabby.status': normalizedStatus,
-        updatedAt: new Date(),
-      });
+      return res.status(200).json({ status: 'rejected_handled' });
     }
 
-    return res.status(200).json({ status: 'success', paymentStatus: normalizedStatus });
+    return res.status(200).json({ status: 'acknowledged' });
   } catch (error) {
     console.error('[Tabby Webhook Error]:', error);
-    return res.status(500).json({ message: 'Internal error processing webhook' });
+    return res.status(500).json({ message: 'Internal error processing Tabby webhook' });
   }
 }
 
@@ -236,36 +270,40 @@ export async function verifyReturn(req, res, next) {
     }
 
     const orderData = orderDoc.data();
+    const effectivePaymentId = paymentId || orderData.tabby?.paymentId;
 
-    // If customer was approved on Tabby portal
+    // If customer returned with approved/authorized status
     if (paymentStatus === 'approved' || paymentStatus === 'authorized') {
-      const effectivePaymentId = paymentId || orderData.tabby?.paymentId;
       if (effectivePaymentId) {
         try {
-          await tabbyService.capturePayment(effectivePaymentId, orderData.total);
+          const livePayment = await tabbyService.getPayment(effectivePaymentId);
+          if (livePayment.status === 'AUTHORIZED') {
+            await tabbyService.capturePayment(effectivePaymentId, livePayment.amount || orderData.total);
+          }
         } catch (capErr) {
           console.warn('[Tabby Capture on Return]:', capErr.message);
         }
       }
 
       await orderDoc.ref.update({
-        paymentStatus: 'Paid',
-        status: 'Confirmed',
+        status: 'paid',
+        paymentStatus: 'paid',
         'tabby.status': 'approved',
         updatedAt: new Date(),
       });
 
       return res.status(200).json({
         success: true,
-        status: 'Confirmed',
+        status: 'paid',
         orderId,
-        paymentStatus: 'Paid',
+        paymentStatus: 'paid',
       });
     }
 
     // Cancelled or declined
     await orderDoc.ref.update({
-      paymentStatus: paymentStatus === 'canceled' ? 'Cancelled' : 'Failed',
+      status: paymentStatus === 'canceled' || paymentStatus === 'cancelled' ? 'Cancelled' : 'Failed',
+      paymentStatus: paymentStatus === 'canceled' || paymentStatus === 'cancelled' ? 'Cancelled' : 'Failed',
       'tabby.status': paymentStatus || 'failed',
       updatedAt: new Date(),
     });

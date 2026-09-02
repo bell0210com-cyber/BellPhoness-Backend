@@ -22,13 +22,14 @@ function formatPhoneNumber(phone) {
 
 /**
  * Creates a Tabby checkout session for an order
+ * Uses SECRET_KEY for backend session creation and https:// for all merchant_urls
  */
 export async function createCheckoutSession({ order, user, clientOrigin }) {
   if (!isTabbyConfigured()) {
     console.warn('[Tabby] Keys are not configured. Returning development placeholder session.');
     return {
       checkout_id: `tabby_sandbox_${order.id}`,
-      checkout_url: `${clientOrigin}/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}&simulated=true`,
+      checkout_url: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}&simulated=true`,
       payment_id: `tabby_payment_${order.id}`,
       status: 'created',
       isSimulated: true,
@@ -36,9 +37,9 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   }
 
   const shippingAddr = order.shippingAddress || {};
-  const customerName = shippingAddr.fullName || user.name || 'Bell Customer';
-  const customerPhone = formatPhoneNumber(shippingAddr.phone || user.phone);
-  const customerEmail = shippingAddr.email || user.email || 'card.success@tabby.ai';
+  const customerName = shippingAddr.fullName || user?.name || 'Bell Customer';
+  const customerPhone = formatPhoneNumber(shippingAddr.phone || user?.phone);
+  const customerEmail = shippingAddr.email || user?.email || 'card.success@tabby.ai';
 
   const formattedItems = (order.items || []).map((item) => ({
     title: item.name || 'Smartphone',
@@ -85,14 +86,14 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
     merchant_urls: {
-      success: `${clientOrigin}/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
-      cancel: `${clientOrigin}/checkout/tabby/callback?paymentStatus=canceled&orderId=${order.id}`,
-      failure: `${clientOrigin}/checkout/tabby/callback?paymentStatus=declined&orderId=${order.id}`,
+      success: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
+      cancel: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=cancelled&orderId=${order.id}`,
+      failure: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=rejected&orderId=${order.id}`,
     },
   };
 
-  // Tabby checkout creation accepts public or secret key as bearer token
-  const bearerToken = tabbyConfig.publicKey || tabbyConfig.secretKey;
+  // Requirement: Use SECRET_KEY for all backend API calls
+  const bearerToken = tabbyConfig.secretKey;
 
   const response = await fetch(`${tabbyConfig.apiUrl}/checkout`, {
     method: 'POST',
@@ -148,38 +149,11 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
 }
 
 /**
- * Captures an authorized Tabby payment
- */
-export async function capturePayment(paymentId, amount) {
-  const token = tabbyConfig.secretKey || tabbyConfig.publicKey;
-  if (!isTabbyConfigured() || !paymentId || paymentId.startsWith('tabby_payment_')) {
-    return { status: 'CLOSED', simulated: true };
-  }
-
-  const response = await fetch(`${tabbyConfig.apiUrl}/payments/${paymentId}/captures`, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      'Accept': 'application/json',
-    },
-    body: JSON.stringify({ amount: Number(amount).toFixed(2) }),
-  });
-
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    console.warn('[Tabby Capture Warning]:', data);
-    return data;
-  }
-
-  return data;
-}
-
-/**
- * Fetches live payment status from Tabby
+ * Fetches live payment status from Tabby using SECRET_KEY
+ * GET https://api.tabby.ai/api/v2/payments/{payment_id}
  */
 export async function getPayment(paymentId) {
-  const token = tabbyConfig.secretKey || tabbyConfig.publicKey;
+  const token = tabbyConfig.secretKey;
   if (!isTabbyConfigured() || !paymentId || paymentId.startsWith('tabby_payment_')) {
     return { id: paymentId, status: 'AUTHORIZED', simulated: true };
   }
@@ -194,10 +168,78 @@ export async function getPayment(paymentId) {
 
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    return { id: paymentId, status: 'UNKNOWN', error: data.error };
+    console.error(`[Tabby Get Payment Error] (${paymentId}):`, data);
+    return { id: paymentId, status: 'UNKNOWN', error: data.error || data.message };
   }
 
   return data;
+}
+
+/**
+ * Captures an authorized Tabby payment using SECRET_KEY
+ * POST https://api.tabby.ai/api/v2/payments/{payment_id}/captures
+ */
+export async function capturePayment(paymentId, amount) {
+  const token = tabbyConfig.secretKey;
+  if (!isTabbyConfigured() || !paymentId || paymentId.startsWith('tabby_payment_')) {
+    return { status: 'CLOSED', simulated: true };
+  }
+
+  const payload = amount ? { amount: Number(amount).toFixed(2) } : {};
+
+  const response = await fetch(`${tabbyConfig.apiUrl}/payments/${paymentId}/captures`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json',
+      'Accept': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    console.warn(`[Tabby Capture Warning] (${paymentId}):`, data);
+    return data;
+  }
+
+  console.log(`[Tabby Capture Success] Payment ${paymentId} captured successfully.`);
+  return data;
+}
+
+/**
+ * Fetches all payments currently stuck in AUTHORIZED status using SECRET_KEY
+ * GET https://api.tabby.ai/api/v2/payments?status=AUTHORIZED
+ */
+export async function listAuthorizedPayments() {
+  const token = tabbyConfig.secretKey;
+  if (!isTabbyConfigured()) {
+    return [];
+  }
+
+  try {
+    const response = await fetch(`${tabbyConfig.apiUrl}/payments?status=AUTHORIZED`, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Accept': 'application/json',
+      },
+    });
+
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      console.warn('[Tabby List Authorized Payments Error]:', data);
+      return [];
+    }
+
+    if (Array.isArray(data)) return data;
+    if (Array.isArray(data.payments)) return data.payments;
+    if (Array.isArray(data.results)) return data.results;
+    return [];
+  } catch (error) {
+    console.error('[Tabby listAuthorizedPayments Exception]:', error.message);
+    return [];
+  }
 }
 
 /**
