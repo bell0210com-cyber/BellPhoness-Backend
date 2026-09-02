@@ -22,7 +22,7 @@ function formatPhoneNumber(phone) {
 
 /**
  * Creates a Tabby checkout session for an order
- * Uses SECRET_KEY for backend session creation and https:// for all merchant_urls
+ * Uses SECRET_KEY for backend session creation and strictly HTTPS for all merchant_urls
  */
 export async function createCheckoutSession({ order, user, clientOrigin }) {
   if (!isTabbyConfigured()) {
@@ -50,6 +50,16 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     reference_id: item.variantId || item.productId || item.sku || 'SKU',
     category: 'Smartphones',
   }));
+
+  // Ensure base domain strictly uses https://
+  let baseDomain = 'https://bellphoness.com';
+  if (clientOrigin && !clientOrigin.includes('localhost')) {
+    baseDomain = clientOrigin.startsWith('http://')
+      ? clientOrigin.replace(/^http:\/\//i, 'https://')
+      : clientOrigin.startsWith('https://')
+      ? clientOrigin
+      : `https://${clientOrigin}`;
+  }
 
   const payload = {
     payment: {
@@ -86,9 +96,9 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
     merchant_urls: {
-      success: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
-      cancel: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=cancelled&orderId=${order.id}`,
-      failure: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=rejected&orderId=${order.id}`,
+      success: `${baseDomain}/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
+      cancel: `${baseDomain}/checkout/tabby/callback?paymentStatus=cancelled&orderId=${order.id}`,
+      failure: `${baseDomain}/checkout/tabby/callback?paymentStatus=rejected&orderId=${order.id}`,
     },
   };
 
