@@ -1,7 +1,14 @@
 import * as products from '../services/productService.js';
 import { uploadProductImages, deleteProductImage } from '../services/storageService.js';
 
-export const publicList = async (req, res, next) => { try { res.json(await products.listProducts({ activeOnly: true, category: req.query.category, search: req.query.search, limit: req.query.limit })); } catch (error) { next(error); } };
+export const publicList = async (req, res, next) => {
+  try {
+    res.setHeader('Cache-Control', 'public, max-age=60, stale-while-revalidate=300');
+    res.json(await products.listProducts({ activeOnly: true, category: req.query.category, search: req.query.search, limit: req.query.limit }));
+  } catch (error) {
+    next(error);
+  }
+};
 export const publicGet = async (req, res, next) => { try { res.json(await products.readProduct(req.params.id, true)); } catch (error) { next(error); } };
 export const adminList = async (req, res, next) => { try { res.json(await products.listProducts({ category: req.query.category, search: req.query.search, limit: req.query.limit })); } catch (error) { next(error); } };
 export const adminGet = async (req, res, next) => { try { res.json(await products.readProduct(req.params.id)); } catch (error) { next(error); } };
