@@ -104,10 +104,10 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
       currency: 'AED',
     },
     merchant_url: {
-      success: `${clientOrigin}/checkout/tamara/callback?paymentStatus=approved&orderId=${order.id}`,
-      failure: `${clientOrigin}/checkout/tamara/callback?paymentStatus=declined&orderId=${order.id}`,
-      cancel: `${clientOrigin}/checkout/tamara/callback?paymentStatus=canceled&orderId=${order.id}`,
-      notification: `${process.env.API_BASE_URL || 'https://api.bellphoness.com'}/api/tamara/webhook`,
+      success: `https://bellphoness.com/checkout/tamara/callback?paymentStatus=approved&orderId=${order.id}`,
+      failure: `https://bellphoness.com/checkout/tamara/callback?paymentStatus=declined&orderId=${order.id}`,
+      cancel: `https://bellphoness.com/checkout/tamara/callback?paymentStatus=canceled&orderId=${order.id}`,
+      notification: `https://bellphoness.com/api/tamara/webhook`,
     },
   };
 
