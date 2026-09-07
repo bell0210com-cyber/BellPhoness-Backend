@@ -295,22 +295,39 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
       responseData.error;
 
     let message = responseData.error || responseData.message || 'Failed to create Tabby checkout session.';
+    const lower = (String(message) + ' ' + String(rejectionCode || '')).toLowerCase();
 
     if (
       rejectionCode === 'order_amount_too_high' ||
-      (typeof message === 'string' && message.toLowerCase().includes('order_amount_too_high'))
+      lower.includes('order_amount_too_high') ||
+      lower.includes('amount too high')
     ) {
       message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
     } else if (
       rejectionCode === 'order_amount_too_low' ||
-      (typeof message === 'string' && message.toLowerCase().includes('order_amount_too_low'))
+      lower.includes('order_amount_too_low') ||
+      lower.includes('amount too low')
     ) {
       message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
+    } else if (
+      responseData.status === 'rejected' ||
+      rejectionCode === 'rejected' ||
+      rejectionCode === 'not_available' ||
+      lower.includes('rejected') ||
+      lower.includes('not_available') ||
+      lower.includes('not available') ||
+      lower.includes('5000000') ||
+      lower.includes('sandbox') ||
+      lower.includes('reserved decline test number')
+    ) {
+      message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
+    } else {
+      message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
     }
 
     throw Object.assign(
       new Error(message),
-      { status: response.status || 500, details: responseData, code: rejectionCode }
+      { status: response.status || 400, details: responseData, code: rejectionCode || 'not_available' }
     );
   }
 
@@ -325,25 +342,43 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
       responseData.rejection_reason_code ||
       responseData.configuration?.available_products?.installments?.[0]?.rejection_reason_code ||
       responseData.configuration?.products?.installments?.rejection_reason_code ||
-      responseData.code;
+      responseData.code ||
+      'not_available';
 
-    let message = 'Tabby installments are not available for this transaction.';
-
-    if (rejectionCode === 'order_amount_too_high') {
-      message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
-    } else if (rejectionCode === 'order_amount_too_low') {
-      message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
-    } else if (
+    const rawReason =
       responseData.configuration?.products?.installments?.rejection_reason ||
       responseData.configuration?.available_products?.installments?.[0]?.rejection_reason ||
-      responseData.rejection_reason
+      responseData.rejection_reason ||
+      '';
+
+    const lower = (String(rawReason) + ' ' + String(rejectionCode || '')).toLowerCase();
+
+    let message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
+
+    if (
+      rejectionCode === 'order_amount_too_high' ||
+      lower.includes('order_amount_too_high') ||
+      lower.includes('amount too high')
     ) {
-      message =
-        responseData.configuration?.products?.installments?.rejection_reason ||
-        responseData.configuration?.available_products?.installments?.[0]?.rejection_reason ||
-        responseData.rejection_reason;
-    } else if (responseData.status === 'rejected' || responseData.rejection_reason_code === 'not_available') {
-      message = 'Your Tabby application was not approved. Please try Tamara or Cash on Delivery instead.';
+      message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
+    } else if (
+      rejectionCode === 'order_amount_too_low' ||
+      lower.includes('order_amount_too_low') ||
+      lower.includes('amount too low')
+    ) {
+      message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
+    } else if (
+      responseData.status === 'rejected' ||
+      rejectionCode === 'rejected' ||
+      rejectionCode === 'not_available' ||
+      lower.includes('rejected') ||
+      lower.includes('not_available') ||
+      lower.includes('not available') ||
+      lower.includes('5000000') ||
+      lower.includes('sandbox') ||
+      lower.includes('reserved decline test number')
+    ) {
+      message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
     }
 
     throw Object.assign(
