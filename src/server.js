@@ -42,10 +42,10 @@ const generalLimiter = rateLimit({
   message: { message: 'Too many requests, please try again later.' },
 });
 
-// 2. Checkout endpoints limit: 10 requests per 15 minutes per IP
+// 2. Checkout endpoints limit: 50 requests per 15 minutes per IP
 const checkoutLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
+  max: 50,
   standardHeaders: true,
   legacyHeaders: false,
   message: { message: 'Too many requests, please try again later.' },
