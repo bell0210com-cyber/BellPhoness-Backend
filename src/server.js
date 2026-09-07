@@ -67,11 +67,45 @@ app.use('/api/', generalLimiter);
 app.use('/api/auth', authLimiter);
 app.use('/api/admin/auth', authLimiter);
 
+// Root status endpoint
+app.get('/', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'BELL Backend API is running successfully.',
+    service: 'BELL Backend API',
+    firebaseConfigured: isFirebaseReady(),
+    endpoints: {
+      health: '/api/health',
+      products: '/api/products',
+      orders: '/api/orders',
+      tabby: '/api/tabby',
+      tamara: '/api/tamara',
+    },
+    storefront: 'http://localhost:5173',
+    adminPanel: 'http://localhost:5173/admin/login',
+  });
+});
+
 // Health check
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
+    service: 'BELL Backend API',
     firebaseConfigured: isFirebaseReady(),
+  });
+});
+
+app.get('/api', (req, res) => {
+  res.json({
+    status: 'ok',
+    message: 'BELL API Base Endpoint',
+    endpoints: {
+      health: '/api/health',
+      products: '/api/products',
+      orders: '/api/orders',
+      tabby: '/api/tabby',
+      tamara: '/api/tamara',
+    },
   });
 });
 
