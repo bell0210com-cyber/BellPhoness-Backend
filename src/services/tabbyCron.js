@@ -5,7 +5,9 @@ import { isTabbyConfigured } from '../config/tabby.js';
 const ordersCollection = () => db().collection('orders');
 
 /**
- * Checks for any Tabby payments stuck in AUTHORIZED status and captures them
+ * Checks for any Tabby payments stuck in authorized status and captures them.
+ * 1. Filter uses lowercase status=authorized.
+ * 2. After capture succeeds, no further retrieve requests are made for the payment.
  */
 export async function checkAndCaptureAuthorizedPayments() {
   if (!isTabbyConfigured()) {
@@ -13,15 +15,15 @@ export async function checkAndCaptureAuthorizedPayments() {
   }
 
   try {
-    console.log('[Tabby Cron] Checking for payments in AUTHORIZED status...');
+    console.log('[Tabby Cron] Checking for payments in authorized status...');
     const payments = await tabbyService.listAuthorizedPayments();
 
     if (!Array.isArray(payments) || payments.length === 0) {
-      console.log('[Tabby Cron] No pending AUTHORIZED payments found.');
+      console.log('[Tabby Cron] No pending authorized payments found.');
       return;
     }
 
-    console.log(`[Tabby Cron] Found ${payments.length} AUTHORIZED payment(s) to capture.`);
+    console.log(`[Tabby Cron] Found ${payments.length} authorized payment(s) to capture.`);
 
     for (const payment of payments) {
       const paymentId = payment.id;
@@ -31,9 +33,9 @@ export async function checkAndCaptureAuthorizedPayments() {
       console.log(`[Tabby Cron] Capturing stuck payment: ${paymentId} (Amount: AED ${amount})...`);
 
       try {
-        await tabbyService.capturePayment(paymentId, amount);
+        const captureResult = await tabbyService.capturePayment(paymentId, amount);
 
-        // Update matching Firestore Order
+        // Update matching Firestore Order directly without making any further retrieve requests
         let orderDoc = null;
         if (orderRefId) {
           const snap = await ordersCollection().doc(orderRefId).get();
@@ -57,6 +59,8 @@ export async function checkAndCaptureAuthorizedPayments() {
           });
           console.log(`[Tabby Cron] Updated Firestore order ${orderDoc.id} status to "paid".`);
         }
+
+        // Capture succeeded: do not make any further retrieve requests for this payment
       } catch (err) {
         console.error(`[Tabby Cron] Failed to capture payment ${paymentId}:`, err.message);
       }
@@ -67,21 +71,21 @@ export async function checkAndCaptureAuthorizedPayments() {
 }
 
 /**
- * Starts the hourly cron job
+ * Starts the daily cron job
  */
 export function startTabbyCronJob() {
-  const ONE_HOUR_MS = 60 * 60 * 1000;
+  const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
   // Run initial check after 30 seconds of server boot
   setTimeout(() => {
     checkAndCaptureAuthorizedPayments();
   }, 30 * 1000);
 
-  // Run recurring check every 1 hour
+  // Run recurring check daily (every 24 hours)
   const intervalId = setInterval(() => {
     checkAndCaptureAuthorizedPayments();
-  }, ONE_HOUR_MS);
+  }, TWENTY_FOUR_HOURS_MS);
 
-  console.log('⏰ [Tabby Cron Job] Initialized (Running every 1 hour).');
+  console.log('⏰ [Tabby Daily Cron Job] Initialized (Running daily).');
   return intervalId;
 }

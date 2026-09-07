@@ -218,8 +218,8 @@ export async function capturePayment(paymentId, amount) {
 }
 
 /**
- * Fetches all payments currently stuck in AUTHORIZED status using SECRET_KEY
- * GET https://api.tabby.ai/api/v2/payments?status=AUTHORIZED
+ * Fetches all payments currently stuck in authorized status using SECRET_KEY
+ * GET https://api.tabby.ai/api/v2/payments?status=authorized
  */
 export async function listAuthorizedPayments() {
   const token = tabbyConfig.secretKey;
@@ -228,7 +228,7 @@ export async function listAuthorizedPayments() {
   }
 
   try {
-    const response = await fetch(`${tabbyConfig.apiUrl}/payments?status=AUTHORIZED`, {
+    const response = await fetch(`${tabbyConfig.apiUrl}/payments?status=authorized`, {
       method: 'GET',
       headers: {
         'Authorization': `Bearer ${token}`,
