@@ -4,7 +4,7 @@ import { tabbyConfig, isTabbyConfigured } from '../config/tabby.js';
  * Formats a phone number for UAE / Tabby compatibility (+971...)
  */
 function formatPhoneNumber(phone) {
-  if (!phone) return '+971500000001';
+  if (!phone) return '+971501234567';
   let cleaned = phone.replace(/[^0-9+]/g, '');
   if (!cleaned.startsWith('+')) {
     if (cleaned.startsWith('00')) {
@@ -28,7 +28,7 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   if (!isTabbyConfigured()) {
     console.warn('[Tabby] Keys are not configured. Returning development placeholder session.');
     return {
-      checkout_id: `tabby_sandbox_${order.id}`,
+      checkout_id: `tabby_dev_${order.id}`,
       checkout_url: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}&simulated=true`,
       payment_id: `tabby_payment_${order.id}`,
       status: 'created',
@@ -39,7 +39,7 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   const shippingAddr = order.shippingAddress || {};
   const customerName = shippingAddr.fullName || user?.name || 'Bell Customer';
   const customerPhone = formatPhoneNumber(shippingAddr.phone || user?.phone);
-  const customerEmail = shippingAddr.email || user?.email || 'card.success@tabby.ai';
+  const customerEmail = shippingAddr.email || user?.email || 'customer@bellphoness.com';
 
   const formattedItems = (order.items || []).map((item) => ({
     title: item.name || 'Smartphone',
@@ -119,9 +119,28 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
 
   if (!response.ok) {
     console.error('[Tabby Checkout API Error]:', responseData);
+    const rejectionCode =
+      responseData.rejection_reason_code ||
+      responseData.code ||
+      responseData.error;
+
+    let message = responseData.error || responseData.message || 'Failed to create Tabby checkout session.';
+
+    if (
+      rejectionCode === 'order_amount_too_high' ||
+      (typeof message === 'string' && message.toLowerCase().includes('order_amount_too_high'))
+    ) {
+      message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
+    } else if (
+      rejectionCode === 'order_amount_too_low' ||
+      (typeof message === 'string' && message.toLowerCase().includes('order_amount_too_low'))
+    ) {
+      message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
+    }
+
     throw Object.assign(
-      new Error(responseData.error || responseData.message || 'Failed to create Tabby checkout session.'),
-      { status: response.status || 500, details: responseData }
+      new Error(message),
+      { status: response.status || 500, details: responseData, code: rejectionCode }
     );
   }
 
@@ -132,20 +151,34 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     null;
 
   if (!webUrl && responseData.status !== 'created') {
+    const rejectionCode =
+      responseData.rejection_reason_code ||
+      responseData.configuration?.available_products?.installments?.[0]?.rejection_reason_code ||
+      responseData.configuration?.products?.installments?.rejection_reason_code ||
+      responseData.code;
+
     let message = 'Tabby installments are not available for this transaction.';
-    if (responseData.rejection_reason_code === 'not_available' || responseData.status === 'rejected') {
-      if (customerPhone.endsWith('0002')) {
-        message = 'Tabby Sandbox: +971500000002 is the reserved Decline Test number. For successful checkout approval, please use +971500000001 or +971501234567.';
-      } else {
-        message = responseData.configuration?.products?.installments?.rejection_reason ||
-          responseData.rejection_reason ||
-          'Tabby installments are not available for this buyer/amount. In Sandbox, please test with +971 50 000 0001.';
-      }
+
+    if (rejectionCode === 'order_amount_too_high') {
+      message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
+    } else if (rejectionCode === 'order_amount_too_low') {
+      message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
+    } else if (
+      responseData.configuration?.products?.installments?.rejection_reason ||
+      responseData.configuration?.available_products?.installments?.[0]?.rejection_reason ||
+      responseData.rejection_reason
+    ) {
+      message =
+        responseData.configuration?.products?.installments?.rejection_reason ||
+        responseData.configuration?.available_products?.installments?.[0]?.rejection_reason ||
+        responseData.rejection_reason;
+    } else if (responseData.status === 'rejected' || responseData.rejection_reason_code === 'not_available') {
+      message = 'Your Tabby application was not approved. Please try Tamara or Cash on Delivery instead.';
     }
 
     throw Object.assign(
       new Error(message),
-      { status: 400, details: responseData }
+      { status: 400, details: responseData, code: rejectionCode }
     );
   }
 
