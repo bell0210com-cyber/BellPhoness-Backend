@@ -93,7 +93,7 @@ export async function createCheckout(req, res, next) {
     });
 
     const orderId = orderDocRef.id;
-    const orderData = { id: orderId, items, subtotal, shipping, total, shippingAddress: input.shippingAddress };
+    const orderData = { id: orderId, userId, items, subtotal, shipping, total, shippingAddress: input.shippingAddress };
 
     const clientOrigin = req.headers.origin || process.env.CLIENT_URL?.split(',')[0] || 'https://bellphoness.com';
 

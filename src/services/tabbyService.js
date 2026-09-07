@@ -1,4 +1,5 @@
 import { tabbyConfig, isTabbyConfigured } from '../config/tabby.js';
+import { db, auth, isFirebaseReady } from '../config/firebaseAdmin.js';
 
 /**
  * Formats a phone number for UAE / Tabby compatibility (+971...)
@@ -18,6 +19,54 @@ function formatPhoneNumber(phone) {
     }
   }
   return cleaned;
+}
+
+function toDateTimestamp(val) {
+  if (!val) return 0;
+  if (typeof val.toDate === 'function') {
+    return val.toDate().getTime();
+  }
+  if (val instanceof Date) {
+    return val.getTime();
+  }
+  if (val._seconds) {
+    return val._seconds * 1000;
+  }
+  if (typeof val === 'string' || typeof val === 'number') {
+    const t = new Date(val).getTime();
+    return isNaN(t) ? 0 : t;
+  }
+  return 0;
+}
+
+function toIsoDate(val) {
+  if (!val) return null;
+  if (typeof val.toDate === 'function') {
+    return val.toDate().toISOString();
+  }
+  if (val instanceof Date) {
+    return val.toISOString();
+  }
+  if (val._seconds) {
+    return new Date(val._seconds * 1000).toISOString();
+  }
+  if (typeof val === 'string' || typeof val === 'number') {
+    const d = new Date(val);
+    if (!isNaN(d.getTime())) return d.toISOString();
+  }
+  return null;
+}
+
+const COMPLETED_STATUSES = new Set(['delivered', 'completed', 'shipped', 'confirmed', 'packed', 'paid']);
+const COMPLETED_PAYMENT_STATUSES = new Set(['paid', 'captured', 'completed', 'authorized']);
+
+function isOrderCompleted(o) {
+  const st = (o.status || '').toLowerCase();
+  const paySt = (o.paymentStatus || o.tabby?.status || o.tamara?.status || '').toLowerCase();
+  if (st === 'cancelled' || st === 'canceled' || paySt === 'failed' || paySt === 'rejected') {
+    return false;
+  }
+  return COMPLETED_STATUSES.has(st) || COMPLETED_PAYMENT_STATUSES.has(paySt);
 }
 
 /**
@@ -50,6 +99,127 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     reference_id: item.variantId || item.productId || item.sku || 'SKU',
     category: 'Smartphones',
   }));
+
+  // Fetch past orders and user creation details from Firestore & Firebase Auth
+  const userId = user?.id || user?.uid || order?.userId;
+  let userOrders = [];
+  let registeredSince = null;
+
+  if (isFirebaseReady() && userId && userId !== 'guest') {
+    // 1. Fetch user creation date from Firebase Auth
+    try {
+      const userRecord = await auth().getUser(userId).catch(() => null);
+      if (userRecord?.metadata?.creationTime) {
+        registeredSince = new Date(userRecord.metadata.creationTime).toISOString();
+      }
+    } catch (authErr) {
+      console.warn('[Tabby] Could not fetch user from Firebase Auth:', authErr.message);
+    }
+
+    // 2. Query Firestore orders collection for this user
+    try {
+      const snapshot = await db()
+        .collection('orders')
+        .where('userId', '==', userId)
+        .get();
+      userOrders = snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    } catch (dbErr) {
+      console.warn('[Tabby] Could not query user orders from Firestore:', dbErr.message);
+    }
+  }
+
+  // Fallback: search by customer email if no orders found by userId
+  if (isFirebaseReady() && userOrders.length === 0 && customerEmail && customerEmail !== 'customer@bellphoness.com') {
+    try {
+      const emailSnapshot = await db()
+        .collection('orders')
+        .where('shippingAddress.email', '==', customerEmail)
+        .get();
+      userOrders = emailSnapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    } catch {
+      // Ignore fallback lookup error
+    }
+  }
+
+  // Exclude current order
+  const currentOrderId = order?.id;
+  const pastOrders = userOrders.filter((o) => o.id !== currentOrderId);
+
+  // Sort past orders descending by creation date (most recent first)
+  pastOrders.sort((a, b) => {
+    const timeA = toDateTimestamp(a.createdAt);
+    const timeB = toDateTimestamp(b.createdAt);
+    return timeB - timeA;
+  });
+
+  // buyer_history.registered_since:
+  // If not available from Firebase Auth, use date of their first order. Fallback to current time.
+  if (!registeredSince) {
+    if (userOrders.length > 0) {
+      const allOrdersSortedAsc = [...userOrders].sort((a, b) => {
+        const timeA = toDateTimestamp(a.createdAt);
+        const timeB = toDateTimestamp(b.createdAt);
+        return timeA - timeB;
+      });
+      registeredSince = toIsoDate(allOrdersSortedAsc[0]?.createdAt);
+    }
+    if (!registeredSince) {
+      registeredSince = new Date().toISOString();
+    }
+  }
+
+  // buyer_history.loyalty_level:
+  // Count all successfully completed orders by this user in Firestore (any payment method)
+  const completedOrdersCount = pastOrders.filter(isOrderCompleted).length;
+  const loyaltyLevel = Number.isInteger(completedOrdersCount) ? completedOrdersCount : 0;
+
+  // order_history:
+  // Fetch last 5-10 orders for this user from Firestore (any payment method, any status, exclude current order).
+  // Include order details (amount, date, status).
+  const orderHistory = pastOrders.slice(0, 10).map((o) => {
+    const purchasedAt = toIsoDate(o.createdAt) || new Date().toISOString();
+    let statusStr = (o.status || o.paymentStatus || 'complete').toLowerCase();
+    if (['delivered', 'paid', 'completed', 'captured'].includes(statusStr)) {
+      statusStr = 'complete';
+    } else if (['cancelled', 'canceled'].includes(statusStr)) {
+      statusStr = 'canceled';
+    } else if (['refunded'].includes(statusStr)) {
+      statusStr = 'refunded';
+    } else {
+      statusStr = 'processing';
+    }
+
+    const historyItem = {
+      purchased_at: purchasedAt,
+      amount: Number(o.total || o.subtotal || 0).toFixed(2),
+      payment_method: o.paymentMethod || 'card',
+      status: statusStr,
+    };
+
+    if (Array.isArray(o.items) && o.items.length) {
+      historyItem.items = o.items.map((it) => ({
+        title: it.name || 'Smartphone / Item',
+        quantity: Number(it.quantity) || 1,
+        unit_price: Number(it.unitPrice || 0).toFixed(2),
+        reference_id: it.variantId || it.productId || it.sku || 'SKU',
+      }));
+    }
+
+    if (o.shippingAddress) {
+      historyItem.shipping_address = {
+        city: o.shippingAddress.city || o.shippingAddress.emirate || 'Dubai',
+        address: [o.shippingAddress.building, o.shippingAddress.street, o.shippingAddress.area].filter(Boolean).join(', ') || 'Sheikh Zayed Road, Dubai',
+        zip: o.shippingAddress.postalCode || '00000',
+      };
+      historyItem.buyer = {
+        phone: formatPhoneNumber(o.shippingAddress.phone),
+        email: o.shippingAddress.email || customerEmail,
+        name: o.shippingAddress.fullName || customerName,
+      };
+    }
+
+    return historyItem;
+  });
 
   // Ensure base domain strictly uses https://
   let baseDomain = 'https://bellphoness.com';
@@ -84,14 +254,14 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         items: formattedItems,
       },
       buyer_history: {
-        registered_since: new Date().toISOString(),
-        loyalty_level: 0,
+        registered_since: registeredSince,
+        loyalty_level: loyaltyLevel,
         wishlist_count: 0,
         is_social_networks_connected: false,
         is_phone_number_verified: true,
         is_email_verified: true,
       },
-      order_history: [],
+      order_history: orderHistory,
     },
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
