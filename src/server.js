@@ -22,10 +22,30 @@ import { startTabbyCronJob } from './services/tabbyCron.js';
 
 const app = express();
 
+const allowedOrigins = [
+  'http://localhost:5173',
+  'http://127.0.0.1:5173',
+  'http://localhost:5000',
+  'https://bellphoness.com',
+  'https://admin.bellphoness.com',
+  ...(process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',').map((s) => s.trim()) : []),
+];
+
 app.use(
   cors({
-    origin: true,
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const isAllowed =
+        origin === 'http://localhost:5173' ||
+        origin === 'http://127.0.0.1:5173' ||
+        origin.includes('localhost') ||
+        origin.includes('bellphoness.com') ||
+        allowedOrigins.includes(origin);
+      return callback(null, isAllowed ? origin : true);
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-signature', 'x-tabby-signature'],
   })
 );
 
