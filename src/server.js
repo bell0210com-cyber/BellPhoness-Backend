@@ -53,12 +53,24 @@ app.use(express.json({ limit: '1mb' }));
 
 // --- Rate Limiting Configuration ---
 
+// Whitelist/bypass legitimate return verification and webhook notifications from rate limiting
+const isBypassedEndpoint = (req) => {
+  const url = req.originalUrl || req.url || '';
+  return (
+    url.includes('/verify-return') ||
+    url.includes('/webhook') ||
+    url.includes('tabby/callback') ||
+    url.includes('tamara/callback')
+  );
+};
+
 // 1. General API limit: 100 requests per 15 minutes per IP
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isBypassedEndpoint,
   message: { message: 'Too many requests, please try again later.' },
 });
 
@@ -68,6 +80,7 @@ const checkoutLimiter = rateLimit({
   max: 50,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isBypassedEndpoint,
   message: { message: 'Too many requests, please try again later.' },
 });
 
@@ -86,6 +99,7 @@ const tabbyLimiter = rateLimit({
   max: 50,
   standardHeaders: true,
   legacyHeaders: false,
+  skip: isBypassedEndpoint,
   message: { message: 'Too many requests, please try again later.' },
 });
 
