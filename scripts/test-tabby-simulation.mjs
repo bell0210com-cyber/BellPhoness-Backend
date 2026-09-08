@@ -8,9 +8,9 @@ function simulateErrorFormatting(rejectionCode, message) {
   const lower = (errorMsg + ' ' + (rejectionCode || '')).toLowerCase();
   
   if (rejectionCode === 'order_amount_too_high' || lower.includes('order_amount_too_high') || lower.includes('amount too high')) {
-    errorMsg = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
+    errorMsg = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
   } else if (rejectionCode === 'order_amount_too_low' || lower.includes('order_amount_too_low') || lower.includes('amount too low')) {
-    errorMsg = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
+    errorMsg = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
   }
   return errorMsg;
 }
@@ -18,7 +18,7 @@ function simulateErrorFormatting(rejectionCode, message) {
 const simulatedMsg = simulateErrorFormatting('order_amount_too_high', 'order_amount_too_high');
 console.log('1. Simulated order_amount_too_high message:');
 console.log('   -> Output:', simulatedMsg);
-if (simulatedMsg.includes('exceeds your available Tabby limit')) {
+if (simulatedMsg.includes('above your current spending limit')) {
   console.log('   ✅ Correctly mapped to user-friendly message\n');
 } else {
   console.error('   ❌ Failed mapping\n');

@@ -104,11 +104,12 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   const userId = user?.id || user?.uid || order?.userId;
   let userOrders = [];
   let registeredSince = null;
+  let userRecord = null;
 
   if (isFirebaseReady() && userId && userId !== 'guest') {
     // 1. Fetch user creation date from Firebase Auth
     try {
-      const userRecord = await auth().getUser(userId).catch(() => null);
+      userRecord = await auth().getUser(userId).catch(() => null);
       if (userRecord?.metadata?.creationTime) {
         registeredSince = new Date(userRecord.metadata.creationTime).toISOString();
       }
@@ -139,6 +140,17 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     } catch {
       // Ignore fallback lookup error
     }
+
+    if (!userRecord) {
+      try {
+        userRecord = await auth().getUserByEmail(customerEmail).catch(() => null);
+        if (userRecord?.metadata?.creationTime) {
+          registeredSince = new Date(userRecord.metadata.creationTime).toISOString();
+        }
+      } catch {
+        // Ignore fallback user lookup
+      }
+    }
   }
 
   // Exclude current order
@@ -153,47 +165,99 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   });
 
   // buyer_history.registered_since:
-  // If not available from Firebase Auth, use date of their first order. Fallback to current time.
-  if (!registeredSince) {
-    if (userOrders.length > 0) {
-      const allOrdersSortedAsc = [...userOrders].sort((a, b) => {
-        const timeA = toDateTimestamp(a.createdAt);
-        const timeB = toDateTimestamp(b.createdAt);
-        return timeA - timeB;
-      });
-      registeredSince = toIsoDate(allOrdersSortedAsc[0]?.createdAt);
-    }
-    if (!registeredSince) {
-      registeredSince = new Date().toISOString();
-    }
+  // Must send Firebase user.metadata.creationTime (ISO 8601 format), NOT current time!
+  if (!registeredSince && userOrders.length > 0) {
+    const allOrdersSortedAsc = [...userOrders].sort((a, b) => {
+      return toDateTimestamp(a.createdAt) - toDateTimestamp(b.createdAt);
+    });
+    registeredSince = toIsoDate(allOrdersSortedAsc[0]?.createdAt);
   }
 
   // buyer_history.loyalty_level:
-  // Count all successfully completed orders by this user in Firestore (any payment method)
-  const completedOrdersCount = pastOrders.filter(isOrderCompleted).length;
+  // Count of successfully completed orders (status = "paid" or "delivered") by this user
+  // Send as integer number
+  const completedOrdersCount = pastOrders.filter((o) => {
+    const st = (o.status || '').trim().toLowerCase();
+    return st === 'paid' || st === 'delivered';
+  }).length;
   const loyaltyLevel = Number.isInteger(completedOrdersCount) ? completedOrdersCount : 0;
 
+  // buyer_history extra fields:
+  // - wishlist_count: count of user's wishlist items from Firestore (or 0 if none)
+  let wishlistCount = 0;
+  if (isFirebaseReady() && userId && userId !== 'guest') {
+    try {
+      const wishlistDoc = await db().collection('wishlists').doc(userId).get();
+      if (wishlistDoc.exists) {
+        const data = wishlistDoc.data() || {};
+        if (Array.isArray(data.items)) {
+          wishlistCount = data.items.length;
+        } else if (Array.isArray(data.products)) {
+          wishlistCount = data.products.length;
+        }
+      }
+    } catch (wishlistErr) {
+      console.debug('[Tabby] Wishlist query notice:', wishlistErr.message);
+    }
+  }
+
+  // - is_email_verified: user.emailVerified from Firebase Auth
+  const isEmailVerified = Boolean(userRecord?.emailVerified);
+
+  // - is_phone_number_verified: true if phone exists
+  const hasPhone = Boolean(shippingAddr.phone || user?.phone || userRecord?.phoneNumber);
+  const isPhoneNumberVerified = hasPhone;
+
   // order_history:
-  // Fetch last 5-10 orders for this user from Firestore (any payment method, any status, exclude current order).
-  // Include order details (amount, date, status).
+  // Fetch last 5-10 orders from Firestore for this user (exclude current order)
+  // Map payment_method: "tabby" -> "card", "tamara" -> "card", "cod" -> "cod", anything else -> "card"
+  // Map status: "paid" or "delivered" -> "complete", "cancelled" -> "canceled", "pending" or "processing" -> "processing", anything else -> "unknown"
+  // Each order must have: purchased_at, amount, payment_method, status, buyer, shipping_address
   const orderHistory = pastOrders.slice(0, 10).map((o) => {
     const purchasedAt = toIsoDate(o.createdAt) || new Date().toISOString();
-    let statusStr = (o.status || o.paymentStatus || 'complete').toLowerCase();
-    if (['delivered', 'paid', 'completed', 'captured'].includes(statusStr)) {
-      statusStr = 'complete';
-    } else if (['cancelled', 'canceled'].includes(statusStr)) {
-      statusStr = 'canceled';
-    } else if (['refunded'].includes(statusStr)) {
-      statusStr = 'refunded';
+    const amount = Number(o.total || o.subtotal || 0).toFixed(2);
+
+    const rawMethod = (o.paymentMethod || '').trim().toLowerCase();
+    let paymentMethod = 'card';
+    if (rawMethod === 'cod' || rawMethod.includes('cash on delivery')) {
+      paymentMethod = 'cod';
+    } else if (rawMethod === 'tabby' || rawMethod === 'tamara') {
+      paymentMethod = 'card';
     } else {
-      statusStr = 'processing';
+      paymentMethod = 'card';
     }
+
+    const rawStatus = (o.status || '').trim().toLowerCase();
+    let status = 'unknown';
+    if (rawStatus === 'paid' || rawStatus === 'delivered') {
+      status = 'complete';
+    } else if (rawStatus === 'cancelled' || rawStatus === 'canceled') {
+      status = 'canceled';
+    } else if (rawStatus === 'pending' || rawStatus === 'processing') {
+      status = 'processing';
+    } else {
+      status = 'unknown';
+    }
+
+    const oShippingAddr = o.shippingAddress || {};
+    const oBuyer = {
+      phone: formatPhoneNumber(oShippingAddr.phone || customerPhone),
+      email: oShippingAddr.email || customerEmail,
+      name: oShippingAddr.fullName || customerName,
+    };
+    const oShippingAddress = {
+      city: oShippingAddr.city || oShippingAddr.emirate || 'Dubai',
+      address: [oShippingAddr.building, oShippingAddr.street, oShippingAddr.area].filter(Boolean).join(', ') || 'Sheikh Zayed Road, Downtown Dubai',
+      zip: oShippingAddr.postalCode || '00000',
+    };
 
     const historyItem = {
       purchased_at: purchasedAt,
-      amount: Number(o.total || o.subtotal || 0).toFixed(2),
-      payment_method: o.paymentMethod || 'card',
-      status: statusStr,
+      amount,
+      payment_method: paymentMethod,
+      status,
+      buyer: oBuyer,
+      shipping_address: oShippingAddress,
     };
 
     if (Array.isArray(o.items) && o.items.length) {
@@ -203,19 +267,6 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         unit_price: Number(it.unitPrice || 0).toFixed(2),
         reference_id: it.variantId || it.productId || it.sku || 'SKU',
       }));
-    }
-
-    if (o.shippingAddress) {
-      historyItem.shipping_address = {
-        city: o.shippingAddress.city || o.shippingAddress.emirate || 'Dubai',
-        address: [o.shippingAddress.building, o.shippingAddress.street, o.shippingAddress.area].filter(Boolean).join(', ') || 'Sheikh Zayed Road, Dubai',
-        zip: o.shippingAddress.postalCode || '00000',
-      };
-      historyItem.buyer = {
-        phone: formatPhoneNumber(o.shippingAddress.phone),
-        email: o.shippingAddress.email || customerEmail,
-        name: o.shippingAddress.fullName || customerName,
-      };
     }
 
     return historyItem;
@@ -254,12 +305,12 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         items: formattedItems,
       },
       buyer_history: {
-        registered_since: registeredSince,
+        ...(registeredSince ? { registered_since: registeredSince } : {}),
         loyalty_level: loyaltyLevel,
-        wishlist_count: 0,
+        wishlist_count: wishlistCount,
         is_social_networks_connected: false,
-        is_phone_number_verified: true,
-        is_email_verified: true,
+        is_phone_number_verified: isPhoneNumberVerified,
+        is_email_verified: isEmailVerified,
       },
       order_history: orderHistory,
     },
@@ -291,43 +342,30 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     console.error('[Tabby Checkout API Error]:', responseData);
     const rejectionCode =
       responseData.rejection_reason_code ||
+      responseData.configuration?.available_products?.installments?.[0]?.rejection_reason_code ||
+      responseData.configuration?.products?.installments?.rejection_reason_code ||
       responseData.code ||
-      responseData.error;
+      responseData.error ||
+      'not_available';
 
-    let message = responseData.error || responseData.message || 'Failed to create Tabby checkout session.';
-    const lower = (String(message) + ' ' + String(rejectionCode || '')).toLowerCase();
+    let message = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
 
-    if (
-      rejectionCode === 'order_amount_too_high' ||
-      lower.includes('order_amount_too_high') ||
-      lower.includes('amount too high')
-    ) {
-      message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
-    } else if (
-      rejectionCode === 'order_amount_too_low' ||
-      lower.includes('order_amount_too_low') ||
-      lower.includes('amount too low')
-    ) {
-      message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
-    } else if (
-      responseData.status === 'rejected' ||
-      rejectionCode === 'rejected' ||
-      rejectionCode === 'not_available' ||
-      lower.includes('rejected') ||
-      lower.includes('not_available') ||
-      lower.includes('not available') ||
-      lower.includes('5000000') ||
-      lower.includes('sandbox') ||
-      lower.includes('reserved decline test number')
-    ) {
-      message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
+    if (rejectionCode === 'order_amount_too_high') {
+      message = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
+    } else if (rejectionCode === 'order_amount_too_low') {
+      message = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
     } else {
-      message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
+      message = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
     }
 
     throw Object.assign(
       new Error(message),
-      { status: response.status || 400, details: responseData, code: rejectionCode || 'not_available' }
+      {
+        status: response.status || 400,
+        rejection_reason: rejectionCode,
+        code: rejectionCode,
+        details: responseData,
+      }
     );
   }
 
@@ -345,45 +383,24 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
       responseData.code ||
       'not_available';
 
-    const rawReason =
-      responseData.configuration?.products?.installments?.rejection_reason ||
-      responseData.configuration?.available_products?.installments?.[0]?.rejection_reason ||
-      responseData.rejection_reason ||
-      '';
+    let message = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
 
-    const lower = (String(rawReason) + ' ' + String(rejectionCode || '')).toLowerCase();
-
-    let message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
-
-    if (
-      rejectionCode === 'order_amount_too_high' ||
-      lower.includes('order_amount_too_high') ||
-      lower.includes('amount too high')
-    ) {
-      message = 'Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead.';
-    } else if (
-      rejectionCode === 'order_amount_too_low' ||
-      lower.includes('order_amount_too_low') ||
-      lower.includes('amount too low')
-    ) {
-      message = 'Your order amount is below the minimum required for Tabby. Please try Tamara or Cash on Delivery instead.';
-    } else if (
-      responseData.status === 'rejected' ||
-      rejectionCode === 'rejected' ||
-      rejectionCode === 'not_available' ||
-      lower.includes('rejected') ||
-      lower.includes('not_available') ||
-      lower.includes('not available') ||
-      lower.includes('5000000') ||
-      lower.includes('sandbox') ||
-      lower.includes('reserved decline test number')
-    ) {
-      message = 'You are not eligible to use Tabby for this order. Please try another payment method like Tamara or Cash on Delivery.';
+    if (rejectionCode === 'order_amount_too_high') {
+      message = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
+    } else if (rejectionCode === 'order_amount_too_low') {
+      message = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
+    } else {
+      message = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
     }
 
     throw Object.assign(
       new Error(message),
-      { status: 400, details: responseData, code: rejectionCode }
+      {
+        status: 400,
+        rejection_reason: rejectionCode,
+        code: rejectionCode,
+        details: responseData,
+      }
     );
   }
 

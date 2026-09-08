@@ -60,6 +60,15 @@ const authLimiter = rateLimit({
   message: { message: 'Too many requests, please try again later.' },
 });
 
+// 4. Tabby payment endpoint limit: 50 requests per 15 minutes per IP
+const tabbyLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 50,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { message: 'Too many requests, please try again later.' },
+});
+
 // Apply General Rate Limiter to all API routes
 app.use('/api/', generalLimiter);
 
@@ -120,8 +129,8 @@ app.use('/api/admin/orders', adminOrderRoutes);
 // Apply Checkout Rate Limiter to Tabby & Tamara payment routes
 app.use('/api/tamara', checkoutLimiter, tamaraRoutes);
 app.use('/api/payments/tamara', checkoutLimiter, tamaraRoutes);
-app.use('/api/tabby', checkoutLimiter, tabbyRoutes);
-app.use('/api/payments/tabby', checkoutLimiter, tabbyRoutes);
+app.use('/api/tabby', tabbyLimiter, tabbyRoutes);
+app.use('/api/payments/tabby', tabbyLimiter, tabbyRoutes);
 
 // Admin Routes
 app.use('/api/admin/customers', adminCustomerRoutes);

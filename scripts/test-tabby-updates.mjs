@@ -31,21 +31,21 @@ console.log('\n--- 1. Rate Limiter Configuration on /api/tabby ---');
 const serverJsPath = path.resolve(__dirname, '../src/server.js');
 const serverJsContent = fs.readFileSync(serverJsPath, 'utf8');
 
-const hasCheckoutLimiter = serverJsContent.includes('const checkoutLimiter = rateLimit({');
-const hasCheckoutMax50 = /checkoutLimiter\s*=\s*rateLimit\(\{[\s\S]*?max:\s*50/.test(serverJsContent);
-const hasTabbyLimiterAttached = serverJsContent.includes("app.use('/api/tabby', checkoutLimiter");
-const hasPaymentTabbyAttached = serverJsContent.includes("app.use('/api/payments/tabby', checkoutLimiter");
+const hasTabbyLimiter = serverJsContent.includes('const tabbyLimiter = rateLimit({');
+const hasTabbyMax50 = /tabbyLimiter\s*=\s*rateLimit\(\{[\s\S]*?max:\s*50/.test(serverJsContent);
+const hasTabbyLimiterAttached = serverJsContent.includes("app.use('/api/tabby', tabbyLimiter");
+const hasPaymentTabbyAttached = serverJsContent.includes("app.use('/api/payments/tabby', tabbyLimiter");
 
 assertTest(
-  'Checkout Rate Limiter is defined with max: 50 requests / 15 minutes',
-  hasCheckoutLimiter && hasCheckoutMax50,
-  'Found checkoutLimiter with max: 50 and windowMs: 15 * 60 * 1000'
+  'Tabby Rate Limiter is defined with max: 50 requests / 15 minutes',
+  hasTabbyLimiter && hasTabbyMax50,
+  'Found tabbyLimiter with max: 50 and windowMs: 15 * 60 * 1000'
 );
 
 assertTest(
   'Rate Limiter is explicitly applied to /api/tabby and /api/payments/tabby',
   hasTabbyLimiterAttached && hasPaymentTabbyAttached,
-  'Both /api/tabby and /api/payments/tabby protected with checkoutLimiter'
+  'Both /api/tabby and /api/payments/tabby protected with tabbyLimiter'
 );
 
 // ----------------------------------------------------
@@ -74,100 +74,119 @@ assertTest(
 );
 
 // ----------------------------------------------------
-// TEST 3: Simulate order_amount_too_high & Customer Messaging
+// TEST 3: Official Tabby Rejection Messages
 // ----------------------------------------------------
-console.log('\n--- 3. Error Handling for order_amount_too_high ---');
+console.log('\n--- 3. Error Handling for Tabby Rejections ---');
 const checkoutPagePath = path.resolve(__dirname, '../../BellPhoness-Frontend/src/pages/CheckoutPage.jsx');
 const checkoutPageContent = fs.readFileSync(checkoutPagePath, 'utf8');
 const callbackPagePath = path.resolve(__dirname, '../../BellPhoness-Frontend/src/pages/TabbyCallbackPage.jsx');
 const callbackPageContent = fs.readFileSync(callbackPagePath, 'utf8');
 
-const backendHandlesTooHigh = tabbyServiceContent.includes('order_amount_too_high') && 
-  tabbyServiceContent.includes('Your order amount exceeds your available Tabby limit');
+const expectedTooHigh = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
+const expectedTooLow = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
+const expectedNotAvailable = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
 
-const checkoutHandlesTooHigh = checkoutPageContent.includes('order_amount_too_high') &&
-  checkoutPageContent.includes('Your order amount exceeds your available Tabby limit');
+const backendHandlesTooHigh = tabbyServiceContent.includes(expectedTooHigh);
+const checkoutHandlesTooHigh = checkoutPageContent.includes(expectedTooHigh);
+const checkoutHandlesTooLow = checkoutPageContent.includes(expectedTooLow);
+const checkoutHandlesNotAvailable = checkoutPageContent.includes(expectedNotAvailable);
 
-const callbackHandlesTooHigh = callbackPageContent.includes('order_amount_too_high') &&
-  callbackPageContent.includes('Your order amount exceeds your available Tabby limit');
+const noTestPhonesInCheckout = !checkoutPageContent.includes('+971500000001') && !checkoutPageContent.includes('5000000');
+const noTestPhonesInBackend = !tabbyServiceContent.includes('5000000') && !tabbyServiceContent.includes('+971500000001');
 
 assertTest(
-  'Backend tabbyService intercepts order_amount_too_high with customer-friendly message',
-  backendHandlesTooHigh,
-  'Returns "Your order amount exceeds your available Tabby limit. Please try Tamara or Cash on Delivery instead."'
+  'Backend tabbyService uses exact official copy for order_amount_too_high, too_low, and not_available',
+  backendHandlesTooHigh && tabbyServiceContent.includes(expectedTooLow) && tabbyServiceContent.includes(expectedNotAvailable),
+  'Tabby service maps official rejection reasons accurately'
 );
 
 assertTest(
-  'Frontend CheckoutPage catches order_amount_too_high and displays fallback guidance',
-  checkoutHandlesTooHigh,
-  'CheckoutPage displays friendly prompt to switch to Tamara or Cash on Delivery'
+  'Frontend CheckoutPage displays exact official Tabby rejection copy',
+  checkoutHandlesTooHigh && checkoutHandlesTooLow && checkoutHandlesNotAvailable,
+  'Matches order_amount_too_high, order_amount_too_low, and not_available exactly'
 );
 
 assertTest(
-  'Frontend TabbyCallbackPage translates rejection code order_amount_too_high',
-  callbackHandlesTooHigh,
-  'TabbyCallbackPage formats rejection reason clearly for customer'
-);
-
-// ----------------------------------------------------
-// TEST 4: Official Tabby SVG Logo Rendering
-// ----------------------------------------------------
-console.log('\n--- 4. Official Tabby SVG Logo & Assets ---');
-const svgIconPath = path.resolve(__dirname, '../../BellPhoness-Frontend/src/assets/payment-methods/tabby-icon.svg');
-const svgExists = fs.existsSync(svgIconPath);
-let svgValid = false;
-if (svgExists) {
-  const svgContent = fs.readFileSync(svgIconPath, 'utf8');
-  svgValid = svgContent.includes('<svg') && svgContent.includes('#6CFF93') && svgContent.includes('<path');
-}
-
-const checkoutUsesSvgIcon = checkoutPageContent.includes("import tabbyIcon from '../assets/payment-methods/tabby-icon.svg'") &&
-  checkoutPageContent.includes('<img') &&
-  checkoutPageContent.includes('src={tabbyIcon}');
-
-assertTest(
-  'Official green Tabby SVG badge exists in /src/assets/payment-methods/tabby-icon.svg',
-  svgExists && svgValid,
-  'File contains authentic vector badge with #6CFF93 green background'
-);
-
-assertTest(
-  'CheckoutPage.jsx imports and renders tabby-icon.svg in payment method list',
-  checkoutUsesSvgIcon,
-  'Payment method option card displays <img src={tabbyIcon} alt="Tabby" />'
+  'No test phone numbers or sandbox-specific logic in rejection derivations',
+  noTestPhonesInCheckout && noTestPhonesInBackend,
+  'Rejections are derived purely from API response rejection_reason field'
 );
 
 // ----------------------------------------------------
-// TEST 5: Session Payload: order_history, registered_since, loyalty_level
+// TEST 4: Official Tabby Logo Badge (80px width)
+// ----------------------------------------------------
+console.log('\n--- 4. Official Tabby Logo Image ---');
+
+const checkoutUsesOfficialBadge = checkoutPageContent.includes('https://assets.tabby.ai/assets/tabby-badge.png');
+const checkoutSpecifiesWidth80 = checkoutPageContent.includes('width: 80');
+
+assertTest(
+  'CheckoutPage.jsx uses official Tabby logo image from https://assets.tabby.ai/assets/tabby-badge.png',
+  checkoutUsesOfficialBadge,
+  'Using official hosted Tabby badge asset'
+);
+
+assertTest(
+  'Tabby logo image has width: 80px and height: auto',
+  checkoutSpecifiesWidth80,
+  'Image styled with width: 80, height: auto'
+);
+
+// ----------------------------------------------------
+// TEST 5: Session Payload: order_history, registered_since, loyalty_level, extra fields
 // ----------------------------------------------------
 console.log('\n--- 5. Tabby Session Payload Fields ---');
 
 const hasOrderHistoryFetch = tabbyServiceContent.includes('order_history: orderHistory') &&
   tabbyServiceContent.includes('pastOrders.slice(0, 10).map(');
 
+const hasOrderHistoryMapping = tabbyServiceContent.includes("paymentMethod = 'cod'") &&
+  tabbyServiceContent.includes("paymentMethod = 'card'") &&
+  tabbyServiceContent.includes("status = 'complete'") &&
+  tabbyServiceContent.includes("status = 'canceled'") &&
+  tabbyServiceContent.includes("status = 'processing'") &&
+  tabbyServiceContent.includes("status = 'unknown'");
+
+const hasOrderHistoryRequiredKeys = tabbyServiceContent.includes('purchased_at:') &&
+  tabbyServiceContent.includes('amount,') &&
+  tabbyServiceContent.includes('payment_method:') &&
+  tabbyServiceContent.includes('status,') &&
+  tabbyServiceContent.includes('buyer:') &&
+  tabbyServiceContent.includes('shipping_address:');
+
 const hasRegisteredSinceAuth = tabbyServiceContent.includes('userRecord?.metadata?.creationTime') &&
-  tabbyServiceContent.includes('registered_since: registeredSince');
+  !tabbyServiceContent.includes('registeredSince = new Date().toISOString()');
 
 const hasLoyaltyLevelInteger = tabbyServiceContent.includes('completedOrdersCount') &&
   tabbyServiceContent.includes('loyalty_level: loyaltyLevel') &&
   tabbyServiceContent.includes('Number.isInteger(completedOrdersCount)');
 
+const hasExtraBuyerFields = tabbyServiceContent.includes('wishlist_count: wishlistCount') &&
+  tabbyServiceContent.includes('is_email_verified: isEmailVerified') &&
+  tabbyServiceContent.includes('is_phone_number_verified: isPhoneNumberVerified');
+
 assertTest(
-  'order_history fetches last 5-10 past orders from Firestore (excluding current order)',
-  hasOrderHistoryFetch,
-  'Maps purchased_at, amount, payment_method, status, items, shipping_address'
+  'order_history fetches last 5-10 orders and maps payment_method and status exactly',
+  hasOrderHistoryFetch && hasOrderHistoryMapping && hasOrderHistoryRequiredKeys,
+  'Maps tabby/tamara->card, cod->cod; paid/delivered->complete, cancelled->canceled, pending/processing->processing, else->unknown'
 );
 
 assertTest(
-  'buyer_history.registered_since uses Firebase Auth creationTime with earliest order fallback',
+  'buyer_history.registered_since uses Firebase Auth creationTime (NOT current time)',
   hasRegisteredSinceAuth,
-  'Pulls userRecord.metadata.creationTime, with fallback to earliest Firestore order date'
+  'Sends ISO 8601 creationTime and avoids current time fallback'
 );
 
 assertTest(
-  'buyer_history.loyalty_level calculates completed orders count as an integer',
+  'buyer_history.loyalty_level counts paid or delivered orders as integer number',
   hasLoyaltyLevelInteger,
-  'Counts all delivered/completed/paid orders and passes integer to session payload'
+  'Counts all completed orders (paid/delivered) and passes integer'
+);
+
+assertTest(
+  'buyer_history includes wishlist_count, is_email_verified, and is_phone_number_verified',
+  hasExtraBuyerFields,
+  'Wishlist count from Firestore, emailVerified from Auth, phone verification boolean'
 );
 
 // ----------------------------------------------------
@@ -194,3 +213,11 @@ assertTest(
 console.log('\n====================================================');
 console.log(`📊 RESULTS: ${passCount} / ${totalTests} Automated Checks Passed (${Math.round((passCount/totalTests)*100)}%)`);
 console.log('====================================================\n');
+
+if (passCount === totalTests) {
+  console.log('🎉 ALL OFFICIAL TABBY API VERIFICATIONS PASSED!');
+  process.exit(0);
+} else {
+  console.error('⚠️ SOME TESTS FAILED. Please review the output above.');
+  process.exit(1);
+}
