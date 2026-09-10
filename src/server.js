@@ -22,32 +22,51 @@ import { startTabbyCronJob } from './services/tabbyCron.js';
 
 const app = express();
 
-const allowedOrigins = [
+const allowedOrigins = new Set([
   'http://localhost:5173',
   'http://127.0.0.1:5173',
   'http://localhost:5000',
   'https://bellphoness.com',
+  'https://www.bellphoness.com',
   'https://admin.bellphoness.com',
   ...(process.env.CLIENT_URL ? process.env.CLIENT_URL.split(',').map((s) => s.trim()) : []),
-];
+]);
+
+const isOriginAllowed = (origin) => {
+  if (!origin) return true;
+  if (allowedOrigins.has(origin)) return true;
+  try {
+    const { hostname } = new URL(origin);
+    if (hostname === 'localhost' || hostname === '127.0.0.1') return true;
+    if (hostname === 'bellphoness.com' || hostname.endsWith('.bellphoness.com')) return true;
+  } catch {
+    return false;
+  }
+  return false;
+};
 
 app.use(
   cors({
     origin: (origin, callback) => {
-      if (!origin) return callback(null, true);
-      const isAllowed =
-        origin === 'http://localhost:5173' ||
-        origin === 'http://127.0.0.1:5173' ||
-        origin.includes('localhost') ||
-        origin.includes('bellphoness.com') ||
-        allowedOrigins.includes(origin);
-      return callback(null, isAllowed ? origin : true);
+      if (isOriginAllowed(origin)) {
+        return callback(null, origin || true);
+      }
+      return callback(null, false);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'x-signature', 'x-tabby-signature'],
   })
 );
+
+// HTTP Security Headers
+app.use((req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+  res.setHeader('X-XSS-Protection', '0');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  next();
+});
 
 app.use(express.json({ limit: '1mb' }));
 

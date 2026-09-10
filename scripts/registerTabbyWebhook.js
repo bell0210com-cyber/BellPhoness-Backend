@@ -1,7 +1,7 @@
 import 'dotenv/config';
 
-const TABBY_SECRET_KEY = process.env.TABBY_SECRET_KEY || 'sk_test_01a03e76-a3d2-02e4-385f-b38c55a856e3';
-const WEBHOOK_URL = 'https://bellphoness.com/api/tabby/webhook';
+const TABBY_SECRET_KEY = process.env.TABBY_SECRET_KEY || '';
+const WEBHOOK_URL = process.env.TABBY_WEBHOOK_URL || 'https://bellphoness.com/api/tabby/webhook';
 
 async function registerWebhook() {
   console.log('--- Registering Tabby Webhook ---');
