@@ -1,9 +1,14 @@
 import 'dotenv/config';
 
+const rawPublicKey = (process.env.TABBY_PUBLIC_KEY || '').trim();
+const validPublicKey = (rawPublicKey && rawPublicKey !== 'pk_test_01a03e76-a3d2-02e4-385f-b38bd6ca4d3a')
+  ? rawPublicKey
+  : 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b';
+
 export const tabbyConfig = {
   env: process.env.TABBY_ENV || 'sandbox',
   apiUrl: (process.env.TABBY_API_URL || 'https://api.tabby.ai/api/v2').trim(),
-  publicKey: (process.env.TABBY_PUBLIC_KEY || 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b').trim(),
+  publicKey: validPublicKey,
   secretKey: (process.env.TABBY_SECRET_KEY || '').trim(),
   merchantCode: (process.env.TABBY_MERCHANT_CODE || 'ALJA').trim(),
   webhookSecret: (process.env.TABBY_WEBHOOK_SECRET || '').trim(),

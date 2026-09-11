@@ -380,21 +380,35 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     responseData.web_url ||
     null;
 
-  // CRITICAL FIX: Ensure checkout_url never passes the Secret Key (sk_...) as the apiKey to Tabby's frontend.
-  // If the returned webUrl contains the Secret Key, replace it with TABBY_PUBLIC_KEY (pk_...).
+  // CRITICAL FIX: Ensure checkout_url strictly uses the correct Public Key: pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b
+  // Tabby's hosted frontend requires this exact Public Key UUID.
+  const CORRECT_PUBLIC_KEY = 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b';
+  const targetPublicKey = (tabbyConfig.publicKey && tabbyConfig.publicKey !== 'pk_test_01a03e76-a3d2-02e4-385f-b38bd6ca4d3a')
+    ? tabbyConfig.publicKey
+    : CORRECT_PUBLIC_KEY;
+
   if (webUrl) {
-    if (tabbyConfig.secretKey && tabbyConfig.publicKey && webUrl.includes(tabbyConfig.secretKey)) {
-      webUrl = webUrl.replaceAll(tabbyConfig.secretKey, tabbyConfig.publicKey);
-    }
+    // 1. Explicitly set apiKey query parameter to the valid Public Key
     try {
       const parsedUrl = new URL(webUrl);
-      const currentApiKey = parsedUrl.searchParams.get('apiKey');
-      if (currentApiKey && currentApiKey.startsWith('sk_') && tabbyConfig.publicKey) {
-        parsedUrl.searchParams.set('apiKey', tabbyConfig.publicKey);
-        webUrl = parsedUrl.toString();
-      }
+      parsedUrl.searchParams.set('apiKey', targetPublicKey);
+      webUrl = parsedUrl.toString();
     } catch {
-      // ignore URL parsing error
+      webUrl = webUrl.replace(/([?&])apiKey=[^&]+/, `$1apiKey=${targetPublicKey}`);
+    }
+
+    // 2. Unconditionally replace any wrong key strings or secret keys anywhere in the URL
+    const WRONG_KEYS = [
+      'pk_test_01a03e76-a3d2-02e4-385f-b38bd6ca4d3a',
+      'sk_test_01a03e76-a3d2-02e4-385f-b38c55a856e3',
+      '01a03e76-a3d2-02e4-385f-b38bd6ca4d3a',
+      tabbyConfig.secretKey,
+    ].filter(Boolean);
+
+    for (const wrongKey of WRONG_KEYS) {
+      if (webUrl.includes(wrongKey)) {
+        webUrl = webUrl.replaceAll(wrongKey, targetPublicKey);
+      }
     }
   }
 

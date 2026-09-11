@@ -49,9 +49,16 @@ jobs:
             set_env TABBY_ENV            "${{ secrets.TABBY_ENV }}"
             set_env TABBY_API_URL        "${{ secrets.TABBY_API_URL }}"
             set_env TABBY_SECRET_KEY     "${{ secrets.TABBY_SECRET_KEY }}"
-            set_env TABBY_PUBLIC_KEY     "${{ secrets.TABBY_PUBLIC_KEY }}"
+            set_env TABBY_PUBLIC_KEY     "pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b"
             set_env TABBY_MERCHANT_CODE  "${{ secrets.TABBY_MERCHANT_CODE }}"
             set_env TABBY_WEBHOOK_SECRET "${{ secrets.TABBY_WEBHOOK_SECRET }}"
+
+            # Clean up any old wrong key UUID across all .env files
+            for TARGET in "/var/www/bellphones/.env" "/var/www/bellphones/backend/.env"; do
+              if [ -f "$TARGET" ]; then
+                sed -i 's/pk_test_01a03e76-a3d2-02e4-385f-b38bd6ca4d3a/pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b/g' "$TARGET"
+              fi
+            done
 
             # Tamara Payment Gateway
             set_env TAMARA_ENV                "${{ secrets.TAMARA_ENV }}"
