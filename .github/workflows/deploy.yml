@@ -10,11 +10,43 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy to VPS
+      - name: Inject environment variables and deploy to VPS
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USERNAME }}
           password: ${{ secrets.VPS_PASSWORD }}
           script: |
+            # ── Inject all required environment variables into the VPS .env ──
+            # set_env adds the key if missing, updates it if already present.
+            # Idempotent: safe to run on every deploy.
+            ENV_FILE="/var/www/bellphones/.env"
+            touch "$ENV_FILE"
+
+            set_env() {
+              local KEY="$1"
+              local VALUE="$2"
+              if grep -q "^${KEY}=" "$ENV_FILE" 2>/dev/null; then
+                sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" "$ENV_FILE"
+              else
+                echo "${KEY}=${VALUE}" >> "$ENV_FILE"
+              fi
+            }
+
+            # Tabby Payment Gateway
+            set_env TABBY_ENV            ${{ secrets.TABBY_ENV }}
+            set_env TABBY_API_URL        ${{ secrets.TABBY_API_URL }}
+            set_env TABBY_SECRET_KEY     ${{ secrets.TABBY_SECRET_KEY }}
+            set_env TABBY_PUBLIC_KEY     ${{ secrets.TABBY_PUBLIC_KEY }}
+            set_env TABBY_MERCHANT_CODE  ${{ secrets.TABBY_MERCHANT_CODE }}
+            set_env TABBY_WEBHOOK_SECRET ${{ secrets.TABBY_WEBHOOK_SECRET }}
+
+            # Tamara Payment Gateway
+            set_env TAMARA_ENV                ${{ secrets.TAMARA_ENV }}
+            set_env TAMARA_API_URL            ${{ secrets.TAMARA_API_URL }}
+            set_env TAMARA_API_TOKEN          ${{ secrets.TAMARA_API_TOKEN }}
+            set_env TAMARA_NOTIFICATION_TOKEN ${{ secrets.TAMARA_NOTIFICATION_TOKEN }}
+            set_env TAMARA_PUBLIC_KEY         ${{ secrets.TAMARA_PUBLIC_KEY }}
+
+            # Run the existing deploy script (git pull, npm ci, pm2 restart, etc.)
             /var/www/bellphones/deploy-backend.sh
