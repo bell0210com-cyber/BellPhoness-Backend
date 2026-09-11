@@ -316,11 +316,10 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         is_email_verified: isEmailVerified,
       },
       order_history: orderHistory,
-      public_key: process.env.TABBY_PUBLIC_KEY || tabbyConfig.publicKey || 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b',
+      public_key: tabbyConfig.publicKey,
     },
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
-    public_key: process.env.TABBY_PUBLIC_KEY || tabbyConfig.publicKey || 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b',
     merchant_urls: {
       success: `${baseDomain}/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
       cancel: `${baseDomain}/checkout/tabby/callback?paymentStatus=cancelled&orderId=${order.id}`,
@@ -377,42 +376,10 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   }
 
   // Extract redirection URL from installments product
-  let webUrl =
+  const webUrl =
     responseData.configuration?.available_products?.installments?.[0]?.web_url ||
     responseData.web_url ||
     null;
-
-  // CRITICAL FIX: Ensure checkout_url strictly uses the correct Public Key: pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b
-  // Tabby's hosted frontend requires this exact Public Key UUID.
-  const CORRECT_PUBLIC_KEY = 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b';
-  const targetPublicKey = (tabbyConfig.publicKey && tabbyConfig.publicKey !== 'pk_test_01a03e76-a3d2-02e4-385f-b38bd6ca4d3a')
-    ? tabbyConfig.publicKey
-    : CORRECT_PUBLIC_KEY;
-
-  if (webUrl) {
-    // 1. Explicitly set apiKey query parameter to the valid Public Key
-    try {
-      const parsedUrl = new URL(webUrl);
-      parsedUrl.searchParams.set('apiKey', targetPublicKey);
-      webUrl = parsedUrl.toString();
-    } catch {
-      webUrl = webUrl.replace(/([?&])apiKey=[^&]+/, `$1apiKey=${targetPublicKey}`);
-    }
-
-    // 2. Unconditionally replace any wrong key strings or secret keys anywhere in the URL
-    const WRONG_KEYS = [
-      'pk_test_01a03e76-a3d2-02e4-385f-b38bd6ca4d3a',
-      'sk_test_01a03e76-a3d2-02e4-385f-b38c55a856e3',
-      '01a03e76-a3d2-02e4-385f-b38bd6ca4d3a',
-      tabbyConfig.secretKey,
-    ].filter(Boolean);
-
-    for (const wrongKey of WRONG_KEYS) {
-      if (webUrl.includes(wrongKey)) {
-        webUrl = webUrl.replaceAll(wrongKey, targetPublicKey);
-      }
-    }
-  }
 
   if (!webUrl && responseData.status !== 'created') {
     const rejectionCode =
