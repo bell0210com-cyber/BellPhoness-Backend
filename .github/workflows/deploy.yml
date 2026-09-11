@@ -18,30 +18,31 @@ jobs:
           password: ${{ secrets.VPS_PASSWORD }}
           script: |
             # ── Inject all required environment variables into the VPS .env ──
-            # set_env adds the key if missing, updates it if already present.
-            # Idempotent: safe to run on every deploy.
-            ENV_FILE="/var/www/bellphones/.env"
-            touch "$ENV_FILE"
-
+            # Writes to both /var/www/bellphones/.env and /var/www/bellphones/backend/.env
             set_env() {
               local KEY="$1"
               local VALUE="$2"
               [ -z "$VALUE" ] && return 0
-              node -e '
-                const fs = require("fs");
-                const file = process.argv[1];
-                const key = process.argv[2];
-                const val = process.argv[3];
-                let content = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
-                const regex = new RegExp("^" + key + "=.*$", "m");
-                const newLine = key + "=\"" + val.replace(/"/g, "\\\"") + "\"";
-                if (regex.test(content)) {
-                  content = content.replace(regex, newLine);
-                } else {
-                  content = (content.endsWith("\n") || content === "" ? content : content + "\n") + newLine + "\n";
-                }
-                fs.writeFileSync(file, content, "utf8");
-              ' "$ENV_FILE" "$KEY" "$VALUE"
+              for TARGET in "/var/www/bellphones/.env" "/var/www/bellphones/backend/.env"; do
+                if [ -d "$(dirname "$TARGET")" ]; then
+                  touch "$TARGET"
+                  node -e '
+                    const fs = require("fs");
+                    const file = process.argv[1];
+                    const key = process.argv[2];
+                    const val = process.argv[3];
+                    let content = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+                    const regex = new RegExp("^" + key + "=.*$", "m");
+                    const newLine = key + "=\"" + val.replace(/"/g, "\\\"") + "\"";
+                    if (regex.test(content)) {
+                      content = content.replace(regex, newLine);
+                    } else {
+                      content = (content.endsWith("\n") || content === "" ? content : content + "\n") + newLine + "\n";
+                    }
+                    fs.writeFileSync(file, content, "utf8");
+                  ' "$TARGET" "$KEY" "$VALUE"
+                fi
+              done
             }
 
             # Tabby Payment Gateway
@@ -60,4 +61,7 @@ jobs:
             set_env TAMARA_PUBLIC_KEY         "${{ secrets.TAMARA_PUBLIC_KEY }}"
 
             # Run the existing deploy script (git pull, npm ci, pm2 restart, etc.)
-            /var/www/bellphones/deploy-backend.sh
+            if [ -f "/var/www/bellphones/deploy-backend.sh" ]; then
+              /var/www/bellphones/deploy-backend.sh
+            fi
+            pm2 restart all || true

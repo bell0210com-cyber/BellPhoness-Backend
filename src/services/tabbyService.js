@@ -316,9 +316,11 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         is_email_verified: isEmailVerified,
       },
       order_history: orderHistory,
+      public_key: tabbyConfig.publicKey,
     },
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
+    public_key: tabbyConfig.publicKey,
     merchant_urls: {
       success: `${baseDomain}/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
       cancel: `${baseDomain}/checkout/tabby/callback?paymentStatus=cancelled&orderId=${order.id}`,
@@ -373,10 +375,28 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   }
 
   // Extract redirection URL from installments product
-  const webUrl =
+  let webUrl =
     responseData.configuration?.available_products?.installments?.[0]?.web_url ||
     responseData.web_url ||
     null;
+
+  // CRITICAL FIX: Ensure checkout_url never passes the Secret Key (sk_...) as the apiKey to Tabby's frontend.
+  // If the returned webUrl contains the Secret Key, replace it with TABBY_PUBLIC_KEY (pk_...).
+  if (webUrl) {
+    if (tabbyConfig.secretKey && tabbyConfig.publicKey && webUrl.includes(tabbyConfig.secretKey)) {
+      webUrl = webUrl.replaceAll(tabbyConfig.secretKey, tabbyConfig.publicKey);
+    }
+    try {
+      const parsedUrl = new URL(webUrl);
+      const currentApiKey = parsedUrl.searchParams.get('apiKey');
+      if (currentApiKey && currentApiKey.startsWith('sk_') && tabbyConfig.publicKey) {
+        parsedUrl.searchParams.set('apiKey', tabbyConfig.publicKey);
+        webUrl = parsedUrl.toString();
+      }
+    } catch {
+      // ignore URL parsing error
+    }
+  }
 
   if (!webUrl && responseData.status !== 'created') {
     const rejectionCode =

@@ -3,6 +3,7 @@ import 'dotenv/config';
 export const tabbyConfig = {
   env: process.env.TABBY_ENV || 'sandbox',
   apiUrl: (process.env.TABBY_API_URL || 'https://api.tabby.ai/api/v2').trim(),
+  publicKey: (process.env.TABBY_PUBLIC_KEY || 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b').trim(),
   secretKey: (process.env.TABBY_SECRET_KEY || '').trim(),
   merchantCode: (process.env.TABBY_MERCHANT_CODE || 'ALJA').trim(),
   webhookSecret: (process.env.TABBY_WEBHOOK_SECRET || '').trim(),
@@ -27,7 +28,8 @@ if (isTabbyConfigured()) {
   console.info(
     `[Tabby] ✅ Configured — env: ${tabbyConfig.env}, ` +
     `merchant: ${tabbyConfig.merchantCode}, ` +
-    `key: ${tabbyConfig.secretKey.slice(0, 12)}...`
+    `public_key: ${tabbyConfig.publicKey ? tabbyConfig.publicKey.slice(0, 12) + '...' : 'missing'}, ` +
+    `secret_key: ${tabbyConfig.secretKey.slice(0, 12)}...`
   );
 } else {
   console.error(
