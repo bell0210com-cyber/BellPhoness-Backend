@@ -26,14 +26,15 @@ export function isTabbyConfigured() {
 }
 
 // ─── Startup Configuration Audit ────────────────────────────────────────────
-// Runs once when the module is first imported (i.e. at server startup).
-// Prints a clear FATAL warning if the secret key is absent so no checkout
-// request can ever silently fall through to a simulated/mock path.
+// Console log both tabbyConfig.publicKey and tabbyConfig.secretKey on server startup
+console.info(`[Tabby Config] TABBY_PUBLIC_KEY: ${tabbyConfig.publicKey}`);
+console.info(`[Tabby Config] TABBY_SECRET_KEY: ${tabbyConfig.secretKey}`);
+
 if (isTabbyConfigured()) {
   console.info(
     `[Tabby] ✅ Configured — env: ${tabbyConfig.env}, ` +
     `merchant: ${tabbyConfig.merchantCode}, ` +
-    `public_key: ${tabbyConfig.publicKey ? tabbyConfig.publicKey.slice(0, 12) + '...' : 'missing'}, ` +
+    `public_key: ${tabbyConfig.publicKey}, ` +
     `secret_key: ${tabbyConfig.secretKey.slice(0, 12)}...`
   );
 } else {

@@ -316,17 +316,19 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         is_email_verified: isEmailVerified,
       },
       order_history: orderHistory,
-      public_key: tabbyConfig.publicKey,
+      public_key: process.env.TABBY_PUBLIC_KEY || tabbyConfig.publicKey || 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b',
     },
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
-    public_key: tabbyConfig.publicKey,
+    public_key: process.env.TABBY_PUBLIC_KEY || tabbyConfig.publicKey || 'pk_test_b8e21976-59a6-4b82-9ae4-0b7305988e0b',
     merchant_urls: {
       success: `${baseDomain}/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}`,
       cancel: `${baseDomain}/checkout/tabby/callback?paymentStatus=cancelled&orderId=${order.id}`,
       failure: `${baseDomain}/checkout/tabby/callback?paymentStatus=rejected&orderId=${order.id}`,
     },
   };
+
+  console.info('[Tabby createCheckoutSession] Sending payment.public_key:', payload.payment.public_key);
 
   // Requirement: Use SECRET_KEY for all backend API calls
   const bearerToken = tabbyConfig.secretKey;

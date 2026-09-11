@@ -71,4 +71,7 @@ jobs:
             if [ -f "/var/www/bellphones/deploy-backend.sh" ]; then
               /var/www/bellphones/deploy-backend.sh
             fi
-            pm2 restart all || true
+            pm2 restart all
+            sleep 3
+            echo "=== PM2 RESTART COMPLETE — PM2 STARTUP LOGS ==="
+            pm2 logs --lines 25 --nostream || true
