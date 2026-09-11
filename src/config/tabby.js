@@ -18,3 +18,21 @@ export function isTabbyConfigured() {
     tabbyConfig.secretKey.startsWith('sk_')
   );
 }
+
+// ─── Startup Configuration Audit ────────────────────────────────────────────
+// Runs once when the module is first imported (i.e. at server startup).
+// Prints a clear FATAL warning if the secret key is absent so no checkout
+// request can ever silently fall through to a simulated/mock path.
+if (isTabbyConfigured()) {
+  console.info(
+    `[Tabby] ✅ Configured — env: ${tabbyConfig.env}, ` +
+    `merchant: ${tabbyConfig.merchantCode}, ` +
+    `key: ${tabbyConfig.secretKey.slice(0, 12)}...`
+  );
+} else {
+  console.error(
+    '[Tabby] ❌ FATAL: TABBY_SECRET_KEY is missing or does not start with "sk_". ' +
+    'Tabby checkout is DISABLED. Set the correct secret key in your server environment variables.'
+  );
+}
+

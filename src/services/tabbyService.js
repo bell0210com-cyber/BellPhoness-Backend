@@ -75,14 +75,17 @@ function isOrderCompleted(o) {
  */
 export async function createCheckoutSession({ order, user, clientOrigin }) {
   if (!isTabbyConfigured()) {
-    console.warn('[Tabby] Keys are not configured. Returning development placeholder session.');
-    return {
-      checkout_id: `tabby_dev_${order.id}`,
-      checkout_url: `https://bellphoness.com/checkout/tabby/callback?paymentStatus=approved&orderId=${order.id}&simulated=true`,
-      payment_id: `tabby_payment_${order.id}`,
-      status: 'created',
-      isSimulated: true,
-    };
+    // Never silently return a simulated session in any environment.
+    // A missing or invalid TABBY_SECRET_KEY is a deployment configuration error
+    // that must be fixed before checkout can work.
+    const configErr = new Error(
+      'Tabby is not configured: TABBY_SECRET_KEY is missing or invalid on this server. ' +
+      'Please set a valid sk_... key in the server environment variables.'
+    );
+    configErr.status = 503;
+    configErr.code = 'tabby_not_configured';
+    console.error('[Tabby] FATAL: createCheckoutSession called but Tabby is not configured. Rejecting request.');
+    throw configErr;
   }
 
   const shippingAddr = order.shippingAddress || {};
@@ -419,8 +422,18 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
  */
 export async function getPayment(paymentId) {
   const token = tabbyConfig.secretKey;
-  if (!isTabbyConfigured() || !paymentId || paymentId.startsWith('tabby_payment_')) {
-    return { id: paymentId, status: 'AUTHORIZED', simulated: true };
+  if (!isTabbyConfigured()) {
+    const configErr = new Error('Tabby is not configured: cannot retrieve payment status.');
+    configErr.status = 503;
+    configErr.code = 'tabby_not_configured';
+    throw configErr;
+  }
+  if (!paymentId) {
+    throw new Error('paymentId is required to retrieve a Tabby payment.');
+  }
+  // Guard against accidentally querying Tabby with a locally-generated simulated ID.
+  if (paymentId.startsWith('tabby_payment_') || paymentId.startsWith('tabby_dev_')) {
+    throw new Error(`Refusing to query Tabby API with a simulated payment ID: "${paymentId}".`);
   }
 
   const response = await fetch(`${tabbyConfig.apiUrl}/payments/${paymentId}`, {
@@ -446,8 +459,18 @@ export async function getPayment(paymentId) {
  */
 export async function capturePayment(paymentId, amount) {
   const token = tabbyConfig.secretKey;
-  if (!isTabbyConfigured() || !paymentId || paymentId.startsWith('tabby_payment_')) {
-    return { status: 'CLOSED', simulated: true };
+  if (!isTabbyConfigured()) {
+    const configErr = new Error('Tabby is not configured: cannot capture payment.');
+    configErr.status = 503;
+    configErr.code = 'tabby_not_configured';
+    throw configErr;
+  }
+  if (!paymentId) {
+    throw new Error('paymentId is required to capture a Tabby payment.');
+  }
+  // Guard against capturing a simulated/dev payment ID.
+  if (paymentId.startsWith('tabby_payment_') || paymentId.startsWith('tabby_dev_')) {
+    throw new Error(`Refusing to capture a simulated Tabby payment ID: "${paymentId}".`);
   }
 
   const payload = amount ? { amount: Number(amount).toFixed(2) } : {};
