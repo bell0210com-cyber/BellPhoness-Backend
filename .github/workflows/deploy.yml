@@ -26,27 +26,38 @@ jobs:
             set_env() {
               local KEY="$1"
               local VALUE="$2"
-              if grep -q "^${KEY}=" "$ENV_FILE" 2>/dev/null; then
-                sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" "$ENV_FILE"
-              else
-                echo "${KEY}=${VALUE}" >> "$ENV_FILE"
-              fi
+              [ -z "$VALUE" ] && return 0
+              node -e '
+                const fs = require("fs");
+                const file = process.argv[1];
+                const key = process.argv[2];
+                const val = process.argv[3];
+                let content = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : "";
+                const regex = new RegExp("^" + key + "=.*$", "m");
+                const newLine = key + "=\"" + val.replace(/"/g, "\\\"") + "\"";
+                if (regex.test(content)) {
+                  content = content.replace(regex, newLine);
+                } else {
+                  content = (content.endsWith("\n") || content === "" ? content : content + "\n") + newLine + "\n";
+                }
+                fs.writeFileSync(file, content, "utf8");
+              ' "$ENV_FILE" "$KEY" "$VALUE"
             }
 
             # Tabby Payment Gateway
-            set_env TABBY_ENV            ${{ secrets.TABBY_ENV }}
-            set_env TABBY_API_URL        ${{ secrets.TABBY_API_URL }}
-            set_env TABBY_SECRET_KEY     ${{ secrets.TABBY_SECRET_KEY }}
-            set_env TABBY_PUBLIC_KEY     ${{ secrets.TABBY_PUBLIC_KEY }}
-            set_env TABBY_MERCHANT_CODE  ${{ secrets.TABBY_MERCHANT_CODE }}
-            set_env TABBY_WEBHOOK_SECRET ${{ secrets.TABBY_WEBHOOK_SECRET }}
+            set_env TABBY_ENV            "${{ secrets.TABBY_ENV }}"
+            set_env TABBY_API_URL        "${{ secrets.TABBY_API_URL }}"
+            set_env TABBY_SECRET_KEY     "${{ secrets.TABBY_SECRET_KEY }}"
+            set_env TABBY_PUBLIC_KEY     "${{ secrets.TABBY_PUBLIC_KEY }}"
+            set_env TABBY_MERCHANT_CODE  "${{ secrets.TABBY_MERCHANT_CODE }}"
+            set_env TABBY_WEBHOOK_SECRET "${{ secrets.TABBY_WEBHOOK_SECRET }}"
 
             # Tamara Payment Gateway
-            set_env TAMARA_ENV                ${{ secrets.TAMARA_ENV }}
-            set_env TAMARA_API_URL            ${{ secrets.TAMARA_API_URL }}
-            set_env TAMARA_API_TOKEN          ${{ secrets.TAMARA_API_TOKEN }}
-            set_env TAMARA_NOTIFICATION_TOKEN ${{ secrets.TAMARA_NOTIFICATION_TOKEN }}
-            set_env TAMARA_PUBLIC_KEY         ${{ secrets.TAMARA_PUBLIC_KEY }}
+            set_env TAMARA_ENV                "${{ secrets.TAMARA_ENV }}"
+            set_env TAMARA_API_URL            "${{ secrets.TAMARA_API_URL }}"
+            set_env TAMARA_API_TOKEN          "${{ secrets.TAMARA_API_TOKEN }}"
+            set_env TAMARA_NOTIFICATION_TOKEN "${{ secrets.TAMARA_NOTIFICATION_TOKEN }}"
+            set_env TAMARA_PUBLIC_KEY         "${{ secrets.TAMARA_PUBLIC_KEY }}"
 
             # Run the existing deploy script (git pull, npm ci, pm2 restart, etc.)
             /var/www/bellphones/deploy-backend.sh
