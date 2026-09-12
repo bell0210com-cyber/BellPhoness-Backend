@@ -51,13 +51,13 @@ export async function checkAndCaptureAuthorizedPayments() {
 
         if (orderDoc) {
           await orderDoc.ref.update({
-            status: 'paid',
-            paymentStatus: 'paid',
+            status: 'Paid',
+            paymentStatus: 'Paid',
             'tabby.status': 'CAPTURED',
             'tabby.cronCapturedAt': new Date(),
             updatedAt: new Date(),
           });
-          console.log(`[Tabby Cron] Updated Firestore order ${orderDoc.id} status to "paid".`);
+          console.log(`[Tabby Cron] Updated Firestore order ${orderDoc.id} status to "Paid".`);
         }
 
         // Capture succeeded: do not make any further retrieve requests for this payment
