@@ -42,7 +42,7 @@ try {
 
 export const isFirebaseReady = () => firebaseInitialized;
 
-export const db = () => {
+const getDbInstance = () => {
   if (!firebaseInitialized) {
     throw Object.assign(
       new Error('Firebase Admin is not configured.'),
@@ -52,6 +52,21 @@ export const db = () => {
 
   return getFirestore();
 };
+
+export const db = new Proxy(getDbInstance, {
+  apply(target) {
+    return target();
+  },
+  get(target, prop) {
+    if (prop in target) {
+      return target[prop];
+    }
+    const firestore = target();
+    const value = firestore[prop];
+    return typeof value === 'function' ? value.bind(firestore) : value;
+  }
+});
+
 
 export const bucket = () => {
   if (!firebaseInitialized) {

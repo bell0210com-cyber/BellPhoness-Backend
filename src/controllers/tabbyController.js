@@ -142,127 +142,118 @@ export async function createCheckout(req, res, next) {
  * 3. Capture Payment: If status is validated as 'AUTHORIZED', immediately trigger capture request to Tabby's capture payment API.
  * 4. Update Firestore Order: Mark order status as 'paid'.
  */
+/**
+ * Handles Webhook Notifications from Tabby
+ * POST /api/tabby/webhook
+ *
+ * UAT Corner Case 5 (Browser tab closed before redirect):
+ * Background webhook updates order status to 'Paid' when user closes tab.
+ * Extracts nested reference_id from Tabby's payload and updates the exact document in Cloud Firestore.
+ */
 export async function handleWebhook(req, res) {
   try {
-    const payload = req.body || {};
-    console.log('📥 [Tabby Webhook Received]:', JSON.stringify(payload, null, 2));
+    const webhookData = req.body || {};
+    console.log('📥 [Tabby Webhook Received]:', JSON.stringify(webhookData, null, 2));
 
-    const incomingStatus = (payload.status || payload.event || '').toLowerCase();
-    const paymentId = payload.id || payload.payment?.id || payload.payment_id;
-    const orderId = payload.order?.reference_id || payload.order_id;
+    // Extract payment status and the exact order ID from Tabby's nested payload
+    const rawStatus = webhookData.status || webhookData.payment?.status || '';
+    const paymentStatus = rawStatus.toUpperCase();
+    const orderId = webhookData.order?.reference_id || webhookData.order_id || webhookData.payment?.order?.reference_id;
 
-    console.log(`[Tabby Webhook Parse] Payment ID: ${paymentId}, Order ID: ${orderId}, Incoming Status: "${incomingStatus}"`);
-
-    if (!paymentId && !orderId) {
-      console.warn('⚠️ [Tabby Webhook Warning] Webhook payload missing paymentId and orderId.');
-      return res.status(200).json({ status: 'ignored_missing_identifiers' });
+    if (!orderId) {
+      console.warn('⚠️ [Tabby Webhook Warning] Missing Order ID in webhook payload.');
+      return res.status(400).send("Missing Order ID");
     }
 
-    // Locate corresponding Firestore Order
-    let orderDoc = null;
-    if (orderId) {
-      const snap = await ordersCollection().doc(orderId).get();
-      if (snap.exists) orderDoc = snap;
-    }
+    console.log(`[Tabby Webhook Parse] Payment ID: ${webhookData.id || 'N/A'}, Order ID: ${orderId}, Status: "${paymentStatus}"`);
 
-    if (!orderDoc && paymentId) {
-      const querySnap = await ordersCollection().where('tabby.paymentId', '==', paymentId).limit(1).get();
-      if (!querySnap.empty) {
-        orderDoc = querySnap.docs[0];
-      }
-    }
+    // If the payment was successful (captured or authorized)
+    if (paymentStatus === 'AUTHORIZED' || paymentStatus === 'CLOSED' || paymentStatus === 'CAPTURED') {
+      const orderRef = db.collection('orders').doc(orderId);
+      const orderSnap = await orderRef.get();
 
-    // Step 1: Check if incoming webhook indicates lowercase 'authorized'
-    const isAuthorizedNotification =
-      incomingStatus === 'authorized' ||
-      incomingStatus === 'payment.authorized' ||
-      incomingStatus === 'created';
+      if (orderSnap.exists) {
+        // Query Cloud Firestore to update the specific order document
+        await orderRef.update({
+          status: 'Paid',
+          paymentStatus: 'Paid',
+          tabbyTransactionId: webhookData.id || '',
+          'tabby.status': paymentStatus,
+          'tabby.paymentId': webhookData.id || '',
+          updatedAt: new Date(),
+        });
+        console.log(`Success: Order ${orderId} marked as Paid via Webhook`);
 
-    if (paymentId && isAuthorizedNotification) {
-      console.log(`🔍 [Tabby Webhook Step 2] Retrieving payment ${paymentId} via Tabby API with Secret Key...`);
-
-      // Step 2: Trigger GET request to Tabby's retrieve payment API
-      const livePayment = await tabbyService.getPayment(paymentId);
-      const verifiedStatus = (livePayment.status || '').toUpperCase();
-      console.log(`🔎 [Tabby Webhook Verification] Payment ${paymentId} Live Status from Tabby API: "${verifiedStatus}"`);
-
-      // Step 3: Check for uppercase 'AUTHORIZED' to validate payment
-      if (verifiedStatus === 'AUTHORIZED') {
-        const captureAmount = livePayment.amount || (orderDoc ? orderDoc.data().total : null);
-        console.log(`💳 [Tabby Webhook Step 3] Payment validated as 'AUTHORIZED'. Triggering capture for AED ${captureAmount}...`);
-
-        // Step 4: Immediately trigger capture request to Tabby's capture payment API
-        const captureResult = await tabbyService.capturePayment(paymentId, captureAmount);
-        console.log(`✅ [Tabby Webhook Step 4] Capture result for ${paymentId}:`, JSON.stringify(captureResult));
-
-        // Step 5: Update Firestore order status to "paid"
-        if (orderDoc) {
-          await orderDoc.ref.update({
-            status: 'paid',
-            paymentStatus: 'paid',
-            'tabby.status': 'CAPTURED',
-            'tabby.capturedAt': new Date(),
-            'tabby.paymentId': paymentId,
-            'tabby.amount': captureAmount,
-            updatedAt: new Date(),
-          });
-          console.log(`📝 [Tabby Webhook] Firestore order ${orderDoc.id} status updated to "paid".`);
-
-          // Dispatch confirmation email
+        // Trigger capture if AUTHORIZED so merchant receives funds
+        if (paymentStatus === 'AUTHORIZED' && webhookData.id) {
           try {
-            const orderData = { id: orderDoc.id, ...orderDoc.data() };
-            const customerEmail = orderData.shippingAddress?.email || orderData.email;
-            if (customerEmail) {
-              await sendOrderStatusEmail({ ...orderData, status: 'Confirmed' }, 'Confirmed', customerEmail);
-              console.log(`📧 [Tabby Webhook] Confirmation email dispatched to ${customerEmail}`);
+            const captureAmount = webhookData.amount || orderSnap.data().total;
+            if (captureAmount) {
+              await tabbyService.capturePayment(webhookData.id, captureAmount);
+              console.log(`💳 [Tabby Webhook] Capture completed for ${orderId}`);
             }
-          } catch (mailErr) {
-            console.error('⚠️ [Tabby Webhook] Confirmation email dispatch error:', mailErr.message);
+          } catch (captureErr) {
+            console.warn('[Tabby Webhook] Capture note:', captureErr.message);
           }
         }
 
-        return res.status(200).json({
-          status: 'success',
-          action: 'captured',
-          verifiedStatus: 'AUTHORIZED',
-          paymentId,
-          orderId: orderDoc?.id || orderId,
-        });
-      } else if (verifiedStatus === 'CLOSED' || verifiedStatus === 'CAPTURED') {
-        console.log(`ℹ️ [Tabby Webhook] Payment ${paymentId} is already in ${verifiedStatus} status.`);
-        if (orderDoc) {
-          await orderDoc.ref.update({
-            status: 'paid',
-            paymentStatus: 'paid',
-            'tabby.status': verifiedStatus,
+        // Dispatch confirmation email
+        try {
+          const orderData = { id: orderSnap.id, ...orderSnap.data() };
+          const customerEmail = orderData.shippingAddress?.email || orderData.email;
+          if (customerEmail) {
+            await sendOrderStatusEmail({ ...orderData, status: 'Confirmed' }, 'Confirmed', customerEmail);
+            console.log(`📧 [Tabby Webhook] Confirmation email dispatched to ${customerEmail}`);
+          }
+        } catch (mailErr) {
+          console.warn('⚠️ [Tabby Webhook] Email note:', mailErr.message);
+        }
+      } else {
+        // Fallback: check by paymentId or merge to ensure order is marked Paid
+        const querySnap = await db.collection('orders').where('tabby.paymentId', '==', orderId).limit(1).get();
+        if (!querySnap.empty) {
+          const matchedDoc = querySnap.docs[0];
+          await matchedDoc.ref.update({
+            status: 'Paid',
+            paymentStatus: 'Paid',
+            tabbyTransactionId: webhookData.id || '',
+            'tabby.status': paymentStatus,
+            'tabby.paymentId': webhookData.id || '',
             updatedAt: new Date(),
           });
+          console.log(`Success: Order ${matchedDoc.id} marked as Paid via Webhook (matched by paymentId)`);
+        } else {
+          await orderRef.set({
+            status: 'Paid',
+            paymentStatus: 'Paid',
+            tabbyTransactionId: webhookData.id || '',
+            'tabby.status': paymentStatus,
+            'tabby.paymentId': webhookData.id || '',
+            updatedAt: new Date(),
+          }, { merge: true });
+          console.log(`Success: Order ${orderId} marked as Paid via Webhook (merged)`);
         }
-        return res.status(200).json({ status: 'already_captured', paymentId });
-      } else {
-        console.warn(`⚠️ [Tabby Webhook] Payment ${paymentId} status is "${verifiedStatus}" (expected "AUTHORIZED"). Skipping capture.`);
-        return res.status(200).json({ status: 'not_authorized', paymentStatus: verifiedStatus });
       }
-    }
-
-    // Handle rejection or failure notifications
-    if (incomingStatus === 'rejected' || incomingStatus === 'failed' || incomingStatus === 'expired') {
-      console.log(`❌ [Tabby Webhook] Handling ${incomingStatus} notification for order ${orderId || paymentId}`);
-      if (orderDoc) {
-        await orderDoc.ref.update({
+    } else if (paymentStatus === 'REJECTED' || paymentStatus === 'EXPIRED' || paymentStatus === 'FAILED') {
+      const orderRef = db.collection('orders').doc(orderId);
+      const orderSnap = await orderRef.get();
+      if (orderSnap.exists) {
+        await orderRef.update({
           status: 'Cancelled',
           paymentStatus: 'Failed',
-          'tabby.status': incomingStatus.toUpperCase(),
+          'tabby.status': paymentStatus,
           updatedAt: new Date(),
         });
+        console.log(`Order ${orderId} marked as Cancelled/Failed via Webhook`);
       }
-      return res.status(200).json({ status: 'rejected_handled' });
     }
 
-    return res.status(200).json({ status: 'acknowledged' });
+    // Always return 200 OK so Tabby stops retrying
+    return res.status(200).send("Webhook Processed successfully");
+
   } catch (error) {
-    console.error('❌ [Tabby Webhook Error]:', error);
-    return res.status(500).json({ message: 'Internal error processing Tabby webhook', error: error.message });
+    console.error("Webhook Firestore Update Error:", error);
+    return res.status(500).send("Server Error processing webhook");
   }
 }
 
