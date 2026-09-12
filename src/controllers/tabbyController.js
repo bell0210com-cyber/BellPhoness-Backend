@@ -155,41 +155,73 @@ export async function handleWebhook(req, res) {
     const webhookData = req.body || {};
     console.log('📥 [Tabby Webhook Received]:', JSON.stringify(webhookData, null, 2));
 
-    // Extract payment status and the exact order ID from Tabby's nested payload
-    const rawStatus = webhookData.status || webhookData.payment?.status || '';
-    const paymentStatus = rawStatus.toUpperCase();
-    const orderId = webhookData.order?.reference_id || webhookData.order_id || webhookData.payment?.order?.reference_id;
+    // 1. Nested Payload Support: safely resolve source data across root, .payment, or .data wrappers
+    const source = webhookData.data || webhookData.payment || webhookData;
 
+    // Extract status and normalize to uppercase
+    const rawStatus = source.status || webhookData.status || webhookData.event || webhookData.type || '';
+    const paymentStatus = String(rawStatus).toUpperCase();
+
+    // Extract exact order reference ID and payment ID
+    const orderId =
+      source.order?.reference_id ||
+      webhookData.order?.reference_id ||
+      webhookData.order_id ||
+      source.order_id ||
+      webhookData.payment?.order?.reference_id;
+
+    const paymentId = source.id || webhookData.id || '';
+
+    // 2. Graceful Test Ping Handling: return HTTP 200 on test pings or health checks lacking an orderId
     if (!orderId) {
-      console.warn('⚠️ [Tabby Webhook Warning] Missing Order ID in webhook payload.');
-      return res.status(400).send("Missing Order ID");
+      console.warn('⚠️ [Tabby Webhook] Missing Order ID in payload (acknowledged test ping/health check).');
+      return res.status(200).send("Webhook ping acknowledged (no order ID)");
     }
 
-    console.log(`[Tabby Webhook Parse] Payment ID: ${webhookData.id || 'N/A'}, Order ID: ${orderId}, Status: "${paymentStatus}"`);
+    console.log(`[Tabby Webhook Parse] Payment ID: ${paymentId || 'N/A'}, Order ID: ${orderId}, Status: "${paymentStatus}"`);
 
-    // If the payment was successful (captured or authorized)
-    if (paymentStatus === 'AUTHORIZED' || paymentStatus === 'CLOSED' || paymentStatus === 'CAPTURED') {
+    // 3. Comprehensive Status Mapping:
+    // Success statuses: AUTHORIZED, CLOSED, CAPTURED, and PAYMENT.AUTHORIZED
+    const isSuccess =
+      paymentStatus === 'AUTHORIZED' ||
+      paymentStatus === 'CLOSED' ||
+      paymentStatus === 'CAPTURED' ||
+      paymentStatus === 'PAYMENT.AUTHORIZED' ||
+      paymentStatus.includes('PAYMENT.AUTHORIZED');
+
+    // Cancellation / failure statuses: REJECTED, EXPIRED, FAILED, CANCELED, and CANCELLED
+    const isCancelled =
+      paymentStatus === 'REJECTED' ||
+      paymentStatus === 'EXPIRED' ||
+      paymentStatus === 'FAILED' ||
+      paymentStatus === 'CANCELED' ||
+      paymentStatus === 'CANCELLED';
+
+    if (isSuccess) {
       const orderRef = db.collection('orders').doc(orderId);
       const orderSnap = await orderRef.get();
 
       if (orderSnap.exists) {
+        const orderData = orderSnap.data() || {};
+        const wasAlreadyPaid = orderData.status === 'Paid' || orderData.paymentStatus === 'Paid';
+
         // Query Cloud Firestore to update the specific order document
         await orderRef.update({
           status: 'Paid',
           paymentStatus: 'Paid',
-          tabbyTransactionId: webhookData.id || '',
+          tabbyTransactionId: paymentId,
           'tabby.status': paymentStatus,
-          'tabby.paymentId': webhookData.id || '',
+          'tabby.paymentId': paymentId,
           updatedAt: new Date(),
         });
         console.log(`Success: Order ${orderId} marked as Paid via Webhook`);
 
         // Trigger capture if AUTHORIZED so merchant receives funds
-        if (paymentStatus === 'AUTHORIZED' && webhookData.id) {
+        if ((paymentStatus === 'AUTHORIZED' || paymentStatus === 'PAYMENT.AUTHORIZED') && paymentId) {
           try {
-            const captureAmount = webhookData.amount || orderSnap.data().total;
+            const captureAmount = source.amount || webhookData.amount || orderData.total;
             if (captureAmount) {
-              await tabbyService.capturePayment(webhookData.id, captureAmount);
+              await tabbyService.capturePayment(paymentId, captureAmount);
               console.log(`💳 [Tabby Webhook] Capture completed for ${orderId}`);
             }
           } catch (captureErr) {
@@ -197,16 +229,19 @@ export async function handleWebhook(req, res) {
           }
         }
 
-        // Dispatch confirmation email
-        try {
-          const orderData = { id: orderSnap.id, ...orderSnap.data() };
-          const customerEmail = orderData.shippingAddress?.email || orderData.email;
-          if (customerEmail) {
-            await sendOrderStatusEmail({ ...orderData, status: 'Confirmed' }, 'Confirmed', customerEmail);
-            console.log(`📧 [Tabby Webhook] Confirmation email dispatched to ${customerEmail}`);
+        // 4. Duplicate Email Prevention: check if already marked as 'Paid' before dispatching confirmation email
+        if (!wasAlreadyPaid) {
+          try {
+            const customerEmail = orderData.shippingAddress?.email || orderData.email;
+            if (customerEmail) {
+              await sendOrderStatusEmail({ id: orderSnap.id, ...orderData, status: 'Confirmed' }, 'Confirmed', customerEmail);
+              console.log(`📧 [Tabby Webhook] Confirmation email dispatched to ${customerEmail}`);
+            }
+          } catch (mailErr) {
+            console.warn('⚠️ [Tabby Webhook] Email note:', mailErr.message);
           }
-        } catch (mailErr) {
-          console.warn('⚠️ [Tabby Webhook] Email note:', mailErr.message);
+        } else {
+          console.log(`ℹ️ [Tabby Webhook] Order ${orderId} was already marked as Paid; skipped duplicate confirmation email.`);
         }
       } else {
         // Fallback: check by paymentId or merge to ensure order is marked Paid
@@ -216,9 +251,9 @@ export async function handleWebhook(req, res) {
           await matchedDoc.ref.update({
             status: 'Paid',
             paymentStatus: 'Paid',
-            tabbyTransactionId: webhookData.id || '',
+            tabbyTransactionId: paymentId,
             'tabby.status': paymentStatus,
-            'tabby.paymentId': webhookData.id || '',
+            'tabby.paymentId': paymentId,
             updatedAt: new Date(),
           });
           console.log(`Success: Order ${matchedDoc.id} marked as Paid via Webhook (matched by paymentId)`);
@@ -226,15 +261,15 @@ export async function handleWebhook(req, res) {
           await orderRef.set({
             status: 'Paid',
             paymentStatus: 'Paid',
-            tabbyTransactionId: webhookData.id || '',
+            tabbyTransactionId: paymentId,
             'tabby.status': paymentStatus,
-            'tabby.paymentId': webhookData.id || '',
+            'tabby.paymentId': paymentId,
             updatedAt: new Date(),
           }, { merge: true });
           console.log(`Success: Order ${orderId} marked as Paid via Webhook (merged)`);
         }
       }
-    } else if (paymentStatus === 'REJECTED' || paymentStatus === 'EXPIRED' || paymentStatus === 'FAILED') {
+    } else if (isCancelled) {
       const orderRef = db.collection('orders').doc(orderId);
       const orderSnap = await orderRef.get();
       if (orderSnap.exists) {
@@ -244,7 +279,7 @@ export async function handleWebhook(req, res) {
           'tabby.status': paymentStatus,
           updatedAt: new Date(),
         });
-        console.log(`Order ${orderId} marked as Cancelled/Failed via Webhook`);
+        console.log(`Order ${orderId} marked as Cancelled/Failed via Webhook (Status: ${paymentStatus})`);
       }
     }
 
