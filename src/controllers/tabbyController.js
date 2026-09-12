@@ -109,6 +109,26 @@ export async function createCheckout(req, res, next) {
       clientOrigin,
     });
 
+    // Check if Tabby rejected the customer during session creation
+    if (session.status === 'rejected' || session.success === false) {
+      console.warn(`⚠️ [Tabby createCheckout] Session rejected for order ${orderId}: Reason = ${session.rejection_reason}`);
+      await orderDocRef.update({
+        status: 'Cancelled',
+        paymentStatus: 'Failed',
+        'tabby.status': 'rejected',
+        'tabby.rejectionReason': session.rejection_reason || 'not_available',
+        updatedAt: new Date(),
+      });
+
+      return res.status(200).json({
+        success: false,
+        status: 'rejected',
+        rejection_reason: session.rejection_reason,
+        message: session.message,
+        orderId,
+      });
+    }
+
     // Update order with Tabby Session Info
     await orderDocRef.update({
       'tabby.checkoutId': session.checkout_id || null,
@@ -129,6 +149,32 @@ export async function createCheckout(req, res, next) {
     });
   } catch (error) {
     next(error);
+  }
+}
+
+/**
+ * Performs background pre-scoring check for Tabby
+ * POST /api/tabby/pre-score
+ */
+export async function preScore(req, res) {
+  try {
+    const { amount, currency, buyer, phone, email, name } = req.body || {};
+    const buyerObj = buyer || {
+      phone: phone || req.user?.phone,
+      email: email || req.user?.email,
+      name: name || req.user?.name,
+    };
+
+    const result = await tabbyService.checkEligibility({
+      amount,
+      currency,
+      buyer: buyerObj,
+    });
+
+    return res.status(200).json(result);
+  } catch (error) {
+    console.warn('[Tabby Pre-scoring Error]:', error.message);
+    return res.status(200).json({ isAvailable: true, status: 'created', failSafe: true });
   }
 }
 

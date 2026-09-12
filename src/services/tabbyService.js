@@ -328,6 +328,7 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   };
 
   console.info('[Tabby createCheckoutSession] Sending payment.public_key:', payload.payment.public_key);
+  console.log('📤 [Tabby Create Session API Request]:', JSON.stringify(payload, null, 2));
 
   // Requirement: Use SECRET_KEY for all backend API calls
   const bearerToken = tabbyConfig.secretKey;
@@ -343,13 +344,14 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
   });
 
   const responseData = await response.json().catch(() => ({}));
+  console.log(`📥 [Tabby Create Session API Response]: Status = ${response.status}`, JSON.stringify(responseData, null, 2));
 
   if (!response.ok) {
-    console.error('[Tabby Checkout API Error]:', responseData);
+    console.error(`❌ [Tabby Checkout API HTTP Error]: Status = ${response.status}`, responseData);
     const rejectionCode =
       responseData.rejection_reason_code ||
       responseData.configuration?.available_products?.installments?.[0]?.rejection_reason_code ||
-      responseData.configuration?.products?.installments?.rejection_reason_code ||
+      responseData.configuration?.products?.installments?.rejection_reason ||
       responseData.code ||
       responseData.error ||
       'not_available';
@@ -360,8 +362,6 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
       message = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
     } else if (rejectionCode === 'order_amount_too_low') {
       message = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
-    } else {
-      message = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
     }
 
     throw Object.assign(
@@ -381,11 +381,12 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     responseData.web_url ||
     null;
 
-  if (!webUrl && responseData.status !== 'created') {
+  // Handle Tabby 200 rejection (e.g. pre-scoring reject test phone +971500000002)
+  if (responseData.status === 'rejected' || (!webUrl && responseData.status !== 'created')) {
     const rejectionCode =
       responseData.rejection_reason_code ||
       responseData.configuration?.available_products?.installments?.[0]?.rejection_reason_code ||
-      responseData.configuration?.products?.installments?.rejection_reason_code ||
+      responseData.configuration?.products?.installments?.rejection_reason ||
       responseData.code ||
       'not_available';
 
@@ -395,28 +396,106 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
       message = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
     } else if (rejectionCode === 'order_amount_too_low') {
       message = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
-    } else {
-      message = 'Sorry, Tabby is unable to approve this purchase, please use an alternative payment method for your order.';
     }
 
-    throw Object.assign(
-      new Error(message),
-      {
-        status: 400,
-        rejection_reason: rejectionCode,
-        code: rejectionCode,
-        details: responseData,
-      }
-    );
+    console.warn(`⚠️ [Tabby Session Rejection]: Code = ${rejectionCode}`);
+    return {
+      success: false,
+      status: 'rejected',
+      rejection_reason: rejectionCode,
+      message,
+      payment_id: responseData.payment?.id || null,
+      checkout_id: responseData.id || null,
+      raw: responseData,
+    };
   }
 
   return {
+    success: true,
     checkout_id: responseData.id,
     checkout_url: webUrl,
     payment_id: responseData.payment?.id,
     status: responseData.status,
     raw: responseData,
   };
+}
+
+/**
+ * Performs background pre-scoring check with minimal required data:
+ * amount, currency, buyer.email, buyer.phone, and merchant_code
+ * POST https://api.tabby.ai/api/v2/checkout
+ */
+export async function checkEligibility({ amount, currency = 'AED', buyer = {} }) {
+  if (!isTabbyConfigured()) {
+    return { isAvailable: true, status: 'created', failSafe: true };
+  }
+
+  const customerPhone = formatPhoneNumber(buyer.phone);
+  const customerEmail = buyer.email || 'customer@bellphoness.com';
+  const customerName = buyer.name || 'Bell Customer';
+
+  const payload = {
+    payment: {
+      amount: Number(amount || 0).toFixed(2),
+      currency: currency || 'AED',
+      buyer: {
+        phone: customerPhone,
+        email: customerEmail,
+        name: customerName,
+      },
+    },
+    lang: 'en',
+    merchant_code: tabbyConfig.merchantCode || 'ALJA',
+  };
+
+  console.log('📤 [Tabby Pre-scoring API Request]:', JSON.stringify(payload, null, 2));
+
+  try {
+    const bearerToken = tabbyConfig.secretKey;
+    const response = await fetch(`${tabbyConfig.apiUrl}/checkout`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${bearerToken}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const responseData = await response.json().catch(() => ({}));
+    console.log(`📥 [Tabby Pre-scoring API Response]: Status = ${response.status}`, JSON.stringify(responseData, null, 2));
+
+    if (responseData.status === 'rejected') {
+      const rejectionReason =
+        responseData.rejection_reason_code ||
+        responseData.configuration?.products?.installments?.rejection_reason ||
+        'not_available';
+
+      let message = 'Sorry, Tabby is unable to approve this purchase. Please use an alternative payment method for your order.';
+      if (rejectionReason === 'order_amount_too_high') {
+        message = 'This purchase is above your current spending limit with Tabby, try a smaller cart or use another payment method.';
+      } else if (rejectionReason === 'order_amount_too_low') {
+        message = 'The purchase amount is below the minimum amount required to use Tabby, try adding more items or use another payment method.';
+      }
+
+      return {
+        isAvailable: false,
+        status: 'rejected',
+        rejectionReason,
+        message,
+        raw: responseData,
+      };
+    }
+
+    return {
+      isAvailable: true,
+      status: responseData.status || 'created',
+      raw: responseData,
+    };
+  } catch (err) {
+    console.warn('[Tabby Pre-scoring Notice] Fail-safe fallback applied:', err.message);
+    return { isAvailable: true, status: 'created', failSafe: true };
+  }
 }
 
 /**

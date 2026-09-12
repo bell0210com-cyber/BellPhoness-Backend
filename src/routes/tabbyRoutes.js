@@ -18,4 +18,8 @@ router.get('/order/:id', optionalFirebaseToken, controller.getPaymentStatus);
 // 4. Return Verification from Tabby redirect callback
 router.post('/verify-return', optionalFirebaseToken, controller.verifyReturn);
 
+// 5. Background Pre-scoring / Eligibility Check
+router.post('/pre-score', optionalFirebaseToken, controller.preScore);
+router.post('/check-eligibility', optionalFirebaseToken, controller.preScore);
+
 export default router;
