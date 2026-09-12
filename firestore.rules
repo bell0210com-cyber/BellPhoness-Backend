@@ -37,8 +37,16 @@ service cloud.firestore {
       allow update, delete: if admin();
     }
 
+    // Customers collection: used for customer profile storage and real-time profile listeners
+    match /customers/{customerId} {
+      allow read, create, update: if signedIn() && request.auth.uid == customerId;
+      allow read, write: if admin();
+    }
+
+    // Users collection (fallback / legacy)
     match /users/{userId} {
       allow read, create, update: if signedIn() && request.auth.uid == userId;
+      allow read, write: if admin();
       allow delete: if false;
     }
 
@@ -55,5 +63,16 @@ service cloud.firestore {
     match /wishlists/{userId} {
       allow read, write: if signedIn() && request.auth.uid == userId;
     }
+
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if admin();
+    }
+
+    match /heroSlides/{slideId} {
+      allow read: if true;
+      allow write: if admin();
+    }
   }
 }
+
