@@ -316,7 +316,6 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
         is_email_verified: isEmailVerified,
       },
       order_history: orderHistory,
-      public_key: tabbyConfig.publicKey,
     },
     lang: 'en',
     merchant_code: tabbyConfig.merchantCode || 'ALJA',
@@ -327,7 +326,6 @@ export async function createCheckoutSession({ order, user, clientOrigin }) {
     },
   };
 
-  console.info('[Tabby createCheckoutSession] Sending payment.public_key:', payload.payment.public_key);
   console.log('📤 [Tabby Create Session API Request]:', JSON.stringify(payload, null, 2));
 
   // Requirement: Use SECRET_KEY for all backend API calls

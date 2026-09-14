@@ -153,16 +153,40 @@ export async function createCheckout(req, res, next) {
 }
 
 /**
- * Performs background pre-scoring check for Tabby
+ * Performs background pre-scoring check for Tabby (Protected endpoint)
+ * Accepts only authenticated user sessions, takes amount from Firestore active cart,
+ * and returns only { available: true/false } without leaking raw Tabby response data.
  * POST /api/tabby/pre-score
  */
 export async function preScore(req, res) {
   try {
-    const { amount, currency, buyer, phone, email, name } = req.body || {};
+    const userId = req.user?.uid;
+    let amount = 0;
+    let currency = 'AED';
+
+    if (userId) {
+      const cartDoc = await db().collection('carts').doc(userId).get();
+      if (cartDoc.exists) {
+        const cartData = cartDoc.data() || {};
+        amount = Number(cartData.total ?? cartData.amount ?? cartData.subtotal ?? 0);
+        if (!amount && Array.isArray(cartData.items)) {
+          amount = cartData.items.reduce((sum, item) => {
+            const price = Number(item.salePrice ?? item.unitPrice ?? item.price ?? 0);
+            const qty = Number(item.quantity) || 1;
+            return sum + (item.lineTotal !== undefined ? Number(item.lineTotal) : price * qty);
+          }, 0);
+        }
+        if (cartData.currency) {
+          currency = cartData.currency;
+        }
+      }
+    }
+
+    const { buyer, phone, email, name } = req.body || {};
     const buyerObj = buyer || {
-      phone: phone || req.user?.phone,
+      phone: phone || req.user?.phone || req.user?.phoneNumber,
       email: email || req.user?.email,
-      name: name || req.user?.name,
+      name: name || req.user?.name || req.user?.displayName,
     };
 
     const result = await tabbyService.checkEligibility({
@@ -171,10 +195,11 @@ export async function preScore(req, res) {
       buyer: buyerObj,
     });
 
-    return res.status(200).json(result);
+    const isAvailable = Boolean(result && result.isAvailable !== false);
+    return res.status(200).json({ available: isAvailable });
   } catch (error) {
     console.warn('[Tabby Pre-scoring Error]:', error.message);
-    return res.status(200).json({ isAvailable: true, status: 'created', failSafe: true });
+    return res.status(200).json({ available: true });
   }
 }
 
