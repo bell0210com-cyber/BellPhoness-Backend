@@ -161,32 +161,67 @@ export async function createCheckout(req, res, next) {
 export async function preScore(req, res) {
   try {
     const userId = req.user?.uid;
-    let amount = 0;
-    let currency = 'AED';
+    if (!userId) {
+      console.warn('[Tabby Pre-score] Unauthorized / missing userId');
+      return res.status(200).json({ available: false });
+    }
 
-    if (userId) {
-      const cartDoc = await db().collection('carts').doc(userId).get();
-      if (cartDoc.exists) {
-        const cartData = cartDoc.data() || {};
-        amount = Number(cartData.total ?? cartData.amount ?? cartData.subtotal ?? 0);
-        if (!amount && Array.isArray(cartData.items)) {
-          amount = cartData.items.reduce((sum, item) => {
-            const price = Number(item.salePrice ?? item.unitPrice ?? item.price ?? 0);
-            const qty = Number(item.quantity) || 1;
-            return sum + (item.lineTotal !== undefined ? Number(item.lineTotal) : price * qty);
-          }, 0);
-        }
-        if (cartData.currency) {
-          currency = cartData.currency;
-        }
+    const cartDoc = await db().collection('carts').doc(userId).get();
+    if (!cartDoc.exists) {
+      console.warn(`[Tabby Pre-score] No cart found in Firestore for user ${userId}`);
+      return res.status(200).json({ available: false });
+    }
+
+    const cartData = cartDoc.data() || {};
+    const currency = cartData.currency || 'AED';
+
+    // 1. Calculate subtotal from cart items or stored subtotal
+    let subtotal = 0;
+    if (Array.isArray(cartData.items) && cartData.items.length > 0) {
+      subtotal = cartData.items.reduce((sum, item) => {
+        const price = Number(item.salePrice ?? item.unitPrice ?? item.price ?? 0);
+        const qty = Number(item.quantity) || 1;
+        return sum + (item.lineTotal !== undefined ? Number(item.lineTotal) : price * qty);
+      }, 0);
+    }
+    if (!subtotal && cartData.subtotal) {
+      subtotal = Number(cartData.subtotal) || 0;
+    }
+
+    // 2. Calculate shipping amount — exact same calculation as session creation
+    const emirate = cartData.shippingAddress?.emirate || cartData.emirate || req.body?.emirate || '';
+    const shipping = calculateShipping(emirate, subtotal);
+
+    // 3. Amount must be cart total including shipping — same amount used in session creation
+    let amount = 0;
+    if (cartData.total !== undefined && Number(cartData.total) > 0) {
+      const storedTotal = Number(cartData.total);
+      if (subtotal > 0 && storedTotal === subtotal && shipping > 0) {
+        amount = subtotal + shipping;
+      } else {
+        amount = storedTotal;
       }
+    } else if (subtotal > 0) {
+      amount = subtotal + shipping;
+    }
+
+    // NEVER send amount: "0.00"
+    if (!amount || Number(amount) <= 0) {
+      console.warn(`[Tabby Pre-score] Invalid or zero amount (${amount}) for user ${userId}. Returning available: false.`);
+      return res.status(200).json({ available: false });
     }
 
     const { buyer, phone, email, name } = req.body || {};
-    const buyerObj = buyer || {
-      phone: phone || req.user?.phone || req.user?.phoneNumber,
-      email: email || req.user?.email,
-      name: name || req.user?.name || req.user?.displayName,
+    const buyerPhone = phone || buyer?.phone || req.user?.phone || req.user?.phoneNumber;
+    if (!buyerPhone) {
+      console.warn('[Tabby Pre-score] Missing buyer phone number');
+      return res.status(200).json({ available: false });
+    }
+
+    const buyerObj = {
+      phone: buyerPhone,
+      email: email || buyer?.email || req.user?.email || 'customer@bellphoness.com',
+      name: name || buyer?.name || req.user?.name || req.user?.displayName || 'Bell Customer',
     };
 
     const result = await tabbyService.checkEligibility({
@@ -195,11 +230,25 @@ export async function preScore(req, res) {
       buyer: buyerObj,
     });
 
-    const isAvailable = Boolean(result && result.isAvailable !== false);
-    return res.status(200).json({ available: isAvailable });
+    // Only return available: true if Tabby returns status: "created"
+    // NEVER treat an error response as available: true
+    const isAvailable = Boolean(
+      result &&
+      !result.failSafe &&
+      result.status === 'created' &&
+      result.raw?.status === 'created' &&
+      result.isAvailable !== false
+    );
+
+    return res.status(200).json({
+      available: isAvailable,
+      ...(result?.rejectionReason ? { rejectionReason: result.rejectionReason } : {}),
+      ...(result?.message ? { message: result.message } : {}),
+    });
   } catch (error) {
     console.warn('[Tabby Pre-scoring Error]:', error.message);
-    return res.status(200).json({ available: true });
+    // Any error -> return { available: false }
+    return res.status(200).json({ available: false });
   }
 }
 
